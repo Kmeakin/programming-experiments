@@ -15,13 +15,17 @@ pub fn eval<'expr>(expr: &Expr<'expr>, env: &mut Env<'expr>) -> Value<'expr> {
         Expr::App { fun, arg } => {
             let fun = eval(fun, env);
             let arg = eval(arg, env);
-            let Value::Fun { mut env, body } = fun else {
+            let Value::Fun {
+                env: mut new_env,
+                body,
+            } = fun
+            else {
                 panic!(
                     "Bad function application (tried to apply `{fun:?}`, which is not a function)"
                 )
             };
-            env.push(arg);
-            eval(&body, &mut env)
+            new_env.push(arg);
+            eval(&body, &mut new_env)
         }
 
         Expr::Let { val, body } => {
