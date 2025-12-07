@@ -21,7 +21,7 @@ pub type Env<'expr> = Vec<Value<'expr>>;
 pub fn lookup<'expr, 'slice>(env: &'slice [Value<'expr>], index: usize) -> &'slice Value<'expr> {
     let Some(value) = env.iter().nth_back(index) else {
         panic!(
-            "Unbound local variable (tried to lookup index {index} in an environment of length {}",
+            "Unbound local variable (tried to lookup index {index} in an environment of length {})",
             env.len()
         )
     };
