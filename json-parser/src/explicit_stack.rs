@@ -25,7 +25,7 @@ pub fn parse(mut tokens: &[Token]) -> Result<(Json, &[Token]), (&'static str, &[
                     Token::False => state = State::ValueDone(Json::Bool(false)),
                     Token::Null => state = State::ValueDone(Json::Null),
                     Token::Number => state = State::ValueDone(Json::Number),
-                    Token::String => state = State::ValueDone(Json::String),
+                    Token::String(s) => state = State::ValueDone(Json::String(s.clone())),
                     Token::LSquare => {
                         match rest {
                             [] => return Err(("unexpected EOF; unterminated `[`", rest)),
@@ -35,7 +35,7 @@ pub fn parse(mut tokens: &[Token]) -> Result<(Json, &[Token]), (&'static str, &[
                                 continue;
                             }
                             [_, ..] => {
-                                stack.push(Frame::Array1(Vec::new()));
+                                stack.push(Frame::Array1(vec![]));
                                 state = State::ValueStart;
                             }
                         };

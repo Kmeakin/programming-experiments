@@ -1,13 +1,13 @@
 pub mod big_step;
 pub mod explicit_stack;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
     True,
     False,
     Null,
     Number,
-    String,
+    String(String),
 
     LSquare,
     RSquare,
@@ -18,7 +18,7 @@ pub enum Token {
     Colon,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lexeme {
     Token(Token),
     Error(&'static str),
@@ -30,8 +30,9 @@ pub enum Json {
     Bool(bool),
     Null,
     Number,
-    String,
+    String(String),
     Array(Vec<Self>),
+    Object(Vec<(String, Self)>),
 }
 
 pub fn lex(input: &str) -> Option<(Lexeme, &str)> {
@@ -67,7 +68,7 @@ pub fn lex(input: &str) -> Option<(Lexeme, &str)> {
             loop {
                 match bytes {
                     [] => break (Lexeme::Error("unterminated string"), bytes),
-                    [b'"', rest @ ..] => break (Lexeme::Token(Token::String), rest),
+                    [b'"', rest @ ..] => break (Lexeme::Token(Token::String("".into())), rest),
                     [_, rest @ ..] => bytes = rest,
                 }
             }
@@ -105,8 +106,14 @@ mod tests {
 
     #[test]
     fn test_lex_string() {
-        assert_eq!(lex("\"hello\""), Some((Lexeme::Token(Token::String), "")));
-        assert_eq!(lex("\"\""), Some((Lexeme::Token(Token::String), "")));
+        assert_eq!(
+            lex("\"hello\""),
+            Some((Lexeme::Token(Token::String("".into())), ""))
+        );
+        assert_eq!(
+            lex("\"\""),
+            Some((Lexeme::Token(Token::String("".into())), ""))
+        );
         assert_eq!(
             lex("\"unterminated"),
             Some((Lexeme::Error("unterminated string"), ""))
