@@ -1,5 +1,6 @@
 pub mod big_step;
 pub mod cps;
+pub mod double_barrelled_cps;
 pub mod explicit_stack;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
