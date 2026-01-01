@@ -7,7 +7,7 @@ type Cont<Arg, Ret> = Box<
     ) -> Result<(Ret, &'a [Token]), (&'static str, &'a [Token])>,
 >;
 
-fn value<'a, T: 'static>(tokens: &'a [Token], k: Cont<Json, T>) -> PResult<'a, T> {
+fn value<T: 'static>(tokens: &[Token], k: Cont<Json, T>) -> PResult<'_, T> {
     let [token, rest @ ..] = tokens else {
         return k(Err(("unexpected EOF; expected JSON value", tokens)));
     };
@@ -44,11 +44,11 @@ fn value<'a, T: 'static>(tokens: &'a [Token], k: Cont<Json, T>) -> PResult<'a, T
     }
 }
 
-fn array_loop<'a, T: 'static>(
+fn array_loop<T: 'static>(
     mut elems: Vec<Json>,
-    tokens: &'a [Token],
+    tokens: &[Token],
     k: Cont<Json, T>,
-) -> PResult<'a, T> {
+) -> PResult<'_, T> {
     match tokens {
         [Token::RSquare, rest @ ..] => k(Ok((Json::Array(elems), rest))),
         [Token::Comma, rest @ ..] => value(
@@ -66,7 +66,7 @@ fn array_loop<'a, T: 'static>(
     }
 }
 
-fn kv_pair<'a, T: 'static>(tokens: &'a [Token], k: Cont<(String, Json), T>) -> PResult<'a, T> {
+fn kv_pair<T: 'static>(tokens: &[Token], k: Cont<(String, Json), T>) -> PResult<'_, T> {
     let (key, mut tokens) = match tokens {
         [Token::String(key), tokens1 @ ..] => (key.clone(), tokens1),
         [_, ..] => return Err(("unexpected token; expected string or `}`", tokens)),
@@ -91,11 +91,11 @@ fn kv_pair<'a, T: 'static>(tokens: &'a [Token], k: Cont<(String, Json), T>) -> P
     )
 }
 
-fn object_loop<'a, T: 'static>(
+fn object_loop<T: 'static>(
     mut elems: Vec<(String, Json)>,
-    tokens: &'a [Token],
+    tokens: &[Token],
     k: Cont<Json, T>,
-) -> PResult<'a, T> {
+) -> PResult<'_, T> {
     match tokens {
         [Token::RCurly, rest @ ..] => k(Ok((Json::Object(elems), rest))),
         [Token::Comma, rest @ ..] => kv_pair(
@@ -113,7 +113,7 @@ fn object_loop<'a, T: 'static>(
     }
 }
 
-pub fn parse<'a>(tokens: &'a [Token]) -> PResult<'a, Json> {
+pub fn parse(tokens: &[Token]) -> PResult<'_, Json> {
     value(tokens, Box::new(|x| x))
 }
 

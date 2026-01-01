@@ -83,7 +83,7 @@ fn step<'a>(state: State<'a>, env: &mut Vec<Value<'a>>, stack: &mut Vec<Frame<'a
     }
 }
 
-fn eval<'a>(expr: Expr<'a>, mut env: Vec<Value<'a>>) -> Value<'a> {
+pub fn eval<'a>(expr: Expr<'a>, mut env: Vec<Value<'a>>) -> Value<'a> {
     let mut state = State::Expr(expr);
     let mut stack = Vec::new();
     loop {
@@ -101,6 +101,7 @@ mod tests {
     use super::*;
 
     #[track_caller]
+    #[allow(clippy::needless_pass_by_value)]
     fn assert_eval<'expr>(env: Env<'expr>, expr: Expr<'expr>, expect: Value<'expr>) {
         let got = eval(expr, env);
         assert_eq!(got, expect);

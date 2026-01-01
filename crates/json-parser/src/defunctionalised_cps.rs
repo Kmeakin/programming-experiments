@@ -15,18 +15,18 @@ enum KVPairFrame {
 
 struct Cont<F> {
     ret: F,
-    value_cont: Vec<ValueFrame>,
-    kv_pair_cont: Vec<KVPairFrame>,
+    value: Vec<ValueFrame>,
+    kv_pair: Vec<KVPairFrame>,
 }
 
 impl<F> Cont<F> {
     fn push_value(&mut self, frame: ValueFrame) -> &mut Self {
-        self.value_cont.push(frame);
+        self.value.push(frame);
         self
     }
 
     fn push_kv_pair(&mut self, frame: KVPairFrame) -> &mut Self {
-        self.kv_pair_cont.push(frame);
+        self.kv_pair.push(frame);
         self
     }
 }
@@ -40,7 +40,7 @@ fn apply_value<'tokens, F, T>(
 where
     F: FnMut(Json, &'tokens [Token]) -> T,
 {
-    let Some(frame) = ok.value_cont.pop() else {
+    let Some(frame) = ok.value.pop() else {
         return (ok.ret)(value, tokens);
     };
 
@@ -64,7 +64,7 @@ fn apply_kv_pair<'tokens, F, T>(
 where
     F: FnMut(Json, &'tokens [Token]) -> T,
 {
-    let Some(frame) = ok.kv_pair_cont.pop() else {
+    let Some(frame) = ok.kv_pair.pop() else {
         unreachable!()
     };
 
@@ -169,8 +169,8 @@ pub fn parse(tokens: &[Token]) -> Result<(Json, &[Token]), (&'static str, &[Toke
         tokens,
         &mut Cont {
             ret: |value, tokens| Ok((value, tokens)),
-            value_cont: vec![],
-            kv_pair_cont: vec![],
+            value: vec![],
+            kv_pair: vec![],
         },
         Err,
     )

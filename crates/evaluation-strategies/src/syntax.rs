@@ -10,10 +10,7 @@ pub enum Expr<'expr> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Value<'expr> {
     Int(u32),
-    Fun {
-        env: Vec<Value<'expr>>,
-        body: Expr<'expr>,
-    },
+    Fun { env: Vec<Self>, body: Expr<'expr> },
 }
 
 pub type Env<'expr> = Vec<Value<'expr>>;

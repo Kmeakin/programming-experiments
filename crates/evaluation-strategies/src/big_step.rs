@@ -43,6 +43,7 @@ mod tests {
     use super::*;
 
     #[track_caller]
+    #[allow(clippy::needless_pass_by_value)]
     fn assert_eval<'expr>(mut env: Env<'expr>, expr: Expr<'expr>, expect: Value<'expr>) {
         let got = eval(&expr, &mut env);
         assert_eq!(got, expect);

@@ -1,2 +1,3 @@
 package.name = "json-parser"
 package.edition.workspace = true
+lints.workspace = true

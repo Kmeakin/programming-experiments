@@ -1,2 +1,3 @@
 package.name = "evaluation-strategies"
 package.edition.workspace = true
+lints.workspace = true

@@ -72,7 +72,7 @@ pub fn lex(input: &str) -> Option<(Lexeme, &str)> {
             loop {
                 match bytes {
                     [] => break (Lexeme::Error("unterminated string"), bytes),
-                    [b'"', rest @ ..] => break (Lexeme::Token(Token::String("".into())), rest),
+                    [b'"', rest @ ..] => break (Lexeme::Token(Token::String(String::new())), rest),
                     [_, rest @ ..] => bytes = rest,
                 }
             }
@@ -112,11 +112,11 @@ mod tests {
     fn test_lex_string() {
         assert_eq!(
             lex("\"hello\""),
-            Some((Lexeme::Token(Token::String("".into())), ""))
+            Some((Lexeme::Token(Token::String(String::new())), ""))
         );
         assert_eq!(
             lex("\"\""),
-            Some((Lexeme::Token(Token::String("".into())), ""))
+            Some((Lexeme::Token(Token::String(String::new())), ""))
         );
         assert_eq!(
             lex("\"unterminated"),
