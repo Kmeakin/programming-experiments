@@ -1,0 +1,2 @@
+package.name = "evaluation-strategies"
+package.edition.workspace = true

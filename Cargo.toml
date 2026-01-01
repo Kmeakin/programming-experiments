@@ -1,0 +1,3 @@
+workspace.resolver = "3"
+workspace.members = ["crates/*"]
+workspace.package.edition = "2024"
