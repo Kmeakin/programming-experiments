@@ -2,6 +2,7 @@ pub mod big_step;
 pub mod cps;
 pub mod double_barrelled_cps;
 pub mod explicit_stack;
+pub mod stack_allocated_cps;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
