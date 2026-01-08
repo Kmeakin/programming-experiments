@@ -1,23 +1,75 @@
 // Punctuators:
-// [ ] ( ) { } . ->
-// ++ -- & * + - ~ !
-// / % << >> < > <= >= == != ^ | && ||
-// ? : :: ; ...
-// = *= /= %= += -= <<= >>= &= ^= |=
-// , # ##
-// <: :> <% %> %: %:%:
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TokenKind {
+    // Trivia
+    // @ ` \
+    Error(Error),
+
+    // space, horizontal tab, new-line, vertical tab (0x0b), form-feed (0x0c)
+    Whitespace,
+    // //
+    LineComment,
+    // /* */
+    BlockComment,
+
+    // Punctuators (delimiters)
+    // [ ] ( ) { }
+    // <: :> <% %>
     LSquare,
     RSquare,
     LParen,
     RParen,
     LCurly,
     RCurly,
+    DigraphLSquare,
+    DigraphRSquare,
+    DigraphLCurly,
+    DigraphRCurly,
+
+    // Punctuators (preprocessor operations)
+    // ## #
+    // %:%: %:
+    Hash,
+    HashHash,
+    DigraphHash,
+    DigraphHashHash,
+
+    // Punctuators (misc)
+    // ... . -> ? , ; :: :
+    DotDotDot,
     Dot,
     Arrow,
+    Question,
+    Comma,
+    Semicolon,
+    ColonColon,
+    Colon,
 
+    // Punctuators (arithmetic operators)
+    // ++ += +
+    // -- -= -
+    // *= *
+    // /= /
+    // %= %
+
+    // Punctuators (logical operators)
+    // &&
+    // ||
+
+    // Punctuators (bitwise operators)
+    // &= &
+    // |= |
+    // ^= ^
+    // ~
+    // <<= <<
+    // >>= >>
+
+    // Punctuators (comparison operators)
+    // == =
+    // != !
+    // <= <
+    // >= >
     PlusPlus,
     MinusMinus,
     And,
@@ -26,7 +78,6 @@ pub enum TokenKind {
     Minus,
     Tilde,
     Bang,
-
     Slash,
     Percent,
     LessLess,
@@ -41,13 +92,6 @@ pub enum TokenKind {
     Or,
     AndAnd,
     OrOr,
-
-    Question,
-    Colon,
-    ColonColon,
-    Semicolon,
-    DotDotDot,
-
     Equal,
     StarEqual,
     SlashEqual,
@@ -60,22 +104,24 @@ pub enum TokenKind {
     CaretEqual,
     OrEqual,
 
-    Comma,
-    Hash,
-    HashHash,
-
-    // Atoms
-    Identifier,
+    // Literals
+    // pp-number := "."? digit pp-continue*
+    // pp-continue-seq :=
+    //  | exp-char sign-char
+    //  | identifier-continue
+    //  | "."
+    //  | "'" digit
+    //  | "'" nondigit
+    // digit := [0-9]
+    // identifier-continue := [a-zA-Z0-9_]
+    // nondigit := [a-zA-Z_]
+    // exp-char := [epEP]
+    // sign-char := [\-\+]
     Number,
     String,
     Character,
 
-    // Trivia
-    Whitespace,
-    LineComment,
-    BlockComment,
-
-    Error(Error),
+    Identifier,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -86,73 +132,21 @@ pub enum Error {
     UnterminatedBlockComment,
 }
 
-/// Assumes phase 1 (multibyte characters to source character set)
-/// and phase 2 (backslash+newline replaced with newline) have already been
-/// performed
 fn lex_one(text: &str) -> Option<(TokenKind, &str)> {
     let bytes = text.as_bytes();
     let (kind, rest) = match bytes {
         [] => return None,
-        [b' ' | b'\n' | b'\r' | b'\t' | 0x0b | 0x0c, rest @ ..] => {
+
+        // Whitespace
+        [b' ' | b'\t' | b'\n' | 0x0b | 0x0c, rest @ ..] => {
             let mut bytes = rest;
-            while let [b' ' | b'\n' | b'\r' | b'\t' | 0x0b | 0x0c, rest @ ..] = bytes {
+            while let [b' ' | b'\t' | b'\n' | 0x0b | 0x0c, rest @ ..] = bytes {
                 bytes = rest;
             }
             (TokenKind::Whitespace, bytes)
         }
-        [b'!', b'=', rest @ ..] => (TokenKind::BangEqual, rest),
-        [b'!', rest @ ..] => (TokenKind::Bang, rest),
 
-        [b'"', rest @ ..] => {
-            let mut bytes = rest;
-            loop {
-                match bytes {
-                    [] => break (TokenKind::Error(Error::UnterminatedString), bytes),
-                    [b'"', rest @ ..] => break (TokenKind::String, rest),
-                    [b'\\', _, rest @ ..] | [_, rest @ ..] => bytes = rest,
-                }
-            }
-        }
-        [b'#', b'#', rest @ ..] => (TokenKind::HashHash, rest),
-        [b'#', rest @ ..] => (TokenKind::Hash, rest),
-
-        [b'%', b'=', rest @ ..] => (TokenKind::PercentEqual, rest),
-        [b'%', rest @ ..] => (TokenKind::Percent, rest),
-
-        [b'&', b'=', rest @ ..] => (TokenKind::AndEqual, rest),
-        [b'&', b'&', rest @ ..] => (TokenKind::AndAnd, rest),
-        [b'&', rest @ ..] => (TokenKind::And, rest),
-
-        [b'\'', rest @ ..] => {
-            let mut bytes = rest;
-            loop {
-                match bytes {
-                    [] => break (TokenKind::Error(Error::UnterminatedString), bytes),
-                    [b'\'', rest @ ..] => break (TokenKind::Character, rest),
-                    [_, rest @ ..] => bytes = rest,
-                }
-            }
-        }
-
-        [b'(', rest @ ..] => (TokenKind::LParen, rest),
-        [b')', rest @ ..] => (TokenKind::RParen, rest),
-
-        [b'*', b'=', rest @ ..] => (TokenKind::StarEqual, rest),
-        [b'*', rest @ ..] => (TokenKind::Star, rest),
-
-        [b'+', b'+', rest @ ..] => (TokenKind::PlusPlus, rest),
-        [b'+', b'=', rest @ ..] => (TokenKind::PlusEqual, rest),
-        [b'+', rest @ ..] => (TokenKind::Plus, rest),
-
-        [b',', rest @ ..] => (TokenKind::Comma, rest),
-        [b'-', b'-', rest @ ..] => (TokenKind::MinusMinus, rest),
-        [b'-', b'=', rest @ ..] => (TokenKind::MinusEqual, rest),
-        [b'-', rest @ ..] => (TokenKind::Minus, rest),
-
-        [b'.', b'.', b'.', rest @ ..] => (TokenKind::DotDotDot, rest),
-        [b'.', rest @ ..] => (TokenKind::Dot, rest),
-
-        [b'/', b'=', rest @ ..] => (TokenKind::SlashEqual, rest),
+        // Comments
         [b'/', b'/', rest @ ..] => {
             let mut bytes = rest;
             loop {
@@ -173,37 +167,60 @@ fn lex_one(text: &str) -> Option<(TokenKind, &str)> {
                 }
             }
         }
-        [b'/', rest @ ..] => (TokenKind::Slash, rest),
 
-        [b'0'..=b'9', rest @ ..] => {
+        // Literals
+        // characters
+        [b'\'', rest @ ..] => {
             let mut bytes = rest;
-            while let [b'0'..=b'9', rest @ ..] = bytes {
-                bytes = rest;
+            loop {
+                match bytes {
+                    [] => break (TokenKind::Error(Error::UnterminatedCharacter), bytes),
+                    [b'"', rest @ ..] => break (TokenKind::Character, rest),
+                    [b'\\', _, rest @ ..] | [_, rest @ ..] => bytes = rest,
+                }
             }
-            (TokenKind::Number, rest)
         }
 
-        [b':', b':', rest @ ..] => (TokenKind::ColonColon, rest),
-        [b':', rest @ ..] => (TokenKind::Colon, rest),
+        // strings
+        [b'"', rest @ ..] => {
+            let mut bytes = rest;
+            loop {
+                match bytes {
+                    [] => break (TokenKind::Error(Error::UnterminatedString), bytes),
+                    [b'"', rest @ ..] => break (TokenKind::String, rest),
+                    [b'\\', _, rest @ ..] | [_, rest @ ..] => bytes = rest,
+                }
+            }
+        }
 
-        [b';', rest @ ..] => (TokenKind::Semicolon, rest),
+        // pp-numbers
+        [b'.', b'0'..=b'9', rest @ ..] | [b'0'..=b'9', rest @ ..] => {
+            let mut bytes = rest;
+            loop {
+                #[allow(unused_parens, clippy::match_same_arms)]
+                // pp-continue-seq :=
+                match bytes {
+                    // exp-char sign-char
+                    [(b'e' | b'p' | b'E' | b'P'), (b'-' | b'+'), rest @ ..] => bytes = rest,
 
-        [b'<', b'<', b'=', rest @ ..] => (TokenKind::LessLessEqual, rest),
-        [b'<', b'<', rest @ ..] => (TokenKind::LessLess, rest),
-        [b'<', b'=', rest @ ..] => (TokenKind::LessEqual, rest),
-        [b'<', rest @ ..] => (TokenKind::Less, rest),
+                    // identifier-continue
+                    [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] => bytes = rest,
 
-        [b'>', b'>', b'=', rest @ ..] => (TokenKind::GreaterGreaterEqual, rest),
-        [b'>', b'>', rest @ ..] => (TokenKind::GreaterGreater, rest),
-        [b'>', b'=', rest @ ..] => (TokenKind::GreaterEqual, rest),
-        [b'>', rest @ ..] => (TokenKind::Greater, rest),
+                    // "."
+                    [b'.', rest @ ..] => bytes = rest,
 
-        [b'=', b'=', rest @ ..] => (TokenKind::EqualEqual, rest),
-        [b'=', rest @ ..] => (TokenKind::Equal, rest),
+                    // "'" digit
+                    [b'\'', b'0'..=b'9', rest @ ..] => bytes = rest,
 
-        [b'?', rest @ ..] => (TokenKind::Question, rest),
-        [b'@', rest @ ..] => (TokenKind::Error(Error::UnknownCharacter), rest),
+                    // "'" nondigit
+                    [b'\'', (b'a'..=b'z' | b'A'..=b'Z' | b'_'), rest @ ..] => bytes = rest,
 
+                    rest => break (TokenKind::Number, rest),
+                }
+            }
+        }
+
+        // identifiers
         [b'A'..=b'Z' | b'a'..=b'z' | b'_', rest @ ..] => {
             let mut bytes = rest;
             while let [b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_', rest @ ..] = bytes {
@@ -212,20 +229,83 @@ fn lex_one(text: &str) -> Option<(TokenKind, &str)> {
             (TokenKind::Identifier, bytes)
         }
 
+        // Punctuators (brackets)
+        [b'<', b':', rest @ ..] => (TokenKind::DigraphLSquare, rest),
+        [b':', b'>', rest @ ..] => (TokenKind::DigraphRSquare, rest),
+        [b'<', b'%', rest @ ..] => (TokenKind::DigraphLCurly, rest),
+        [b'%', b'>', rest @ ..] => (TokenKind::DigraphRCurly, rest),
+        [b'(', rest @ ..] => (TokenKind::LParen, rest),
+        [b')', rest @ ..] => (TokenKind::RParen, rest),
         [b'[', rest @ ..] => (TokenKind::LSquare, rest),
         [b']', rest @ ..] => (TokenKind::RSquare, rest),
-
-        [b'^', b'=', rest @ ..] => (TokenKind::CaretEqual, rest),
-        [b'^', rest @ ..] => (TokenKind::Caret, rest),
-
-        [b'|', b'=', rest @ ..] => (TokenKind::OrEqual, rest),
-        [b'|', b'|', rest @ ..] => (TokenKind::OrOr, rest),
-        [b'|', rest @ ..] => (TokenKind::Or, rest),
-
         [b'{', rest @ ..] => (TokenKind::LCurly, rest),
         [b'}', rest @ ..] => (TokenKind::RCurly, rest),
-        [b'~', rest @ ..] => (TokenKind::Tilde, rest),
 
+        // Punctuators (preprocessor operators)
+        [b'%', b':', b'%', b':', rest @ ..] => (TokenKind::DigraphHashHash, rest),
+        [b'%', b':', rest @ ..] => (TokenKind::DigraphHash, rest),
+        [b'#', b'#', rest @ ..] => (TokenKind::HashHash, rest),
+        [b'#', rest @ ..] => (TokenKind::Hash, rest),
+
+        // Punctuators (misc)
+        [b'.', b'.', b'.', rest @ ..] => (TokenKind::DotDotDot, rest),
+        [b'.', rest @ ..] => (TokenKind::Dot, rest),
+        [b'-', b'>', rest @ ..] => (TokenKind::Arrow, rest),
+        [b'?', rest @ ..] => (TokenKind::Question, rest),
+        [b',', rest @ ..] => (TokenKind::Comma, rest),
+        [b';', rest @ ..] => (TokenKind::Semicolon, rest),
+        [b':', b':', rest @ ..] => (TokenKind::ColonColon, rest),
+        [b':', rest @ ..] => (TokenKind::Colon, rest),
+
+        // Punctuators (arithmetic operators)
+        [b'+', b'+', rest @ ..] => (TokenKind::PlusPlus, rest),
+        [b'+', b'=', rest @ ..] => (TokenKind::PlusEqual, rest),
+        [b'+', rest @ ..] => (TokenKind::Plus, rest),
+
+        [b'-', b'-', rest @ ..] => (TokenKind::MinusMinus, rest),
+        [b'-', b'=', rest @ ..] => (TokenKind::MinusEqual, rest),
+        [b'-', rest @ ..] => (TokenKind::Minus, rest),
+
+        [b'*', b'=', rest @ ..] => (TokenKind::StarEqual, rest),
+        [b'*', rest @ ..] => (TokenKind::Star, rest),
+
+        [b'/', b'=', rest @ ..] => (TokenKind::SlashEqual, rest),
+        [b'/', rest @ ..] => (TokenKind::Slash, rest),
+
+        [b'%', b'=', rest @ ..] => (TokenKind::PercentEqual, rest),
+        [b'%', rest @ ..] => (TokenKind::Percent, rest),
+
+        // Punctuators (logical operators)
+        [b'&', b'&', rest @ ..] => (TokenKind::AndAnd, rest),
+        [b'|', b'|', rest @ ..] => (TokenKind::OrOr, rest),
+
+        // Punctuators (bitwise operators)
+        [b'&', b'=', rest @ ..] => (TokenKind::AndEqual, rest),
+        [b'&', rest @ ..] => (TokenKind::And, rest),
+        [b'|', b'=', rest @ ..] => (TokenKind::OrEqual, rest),
+        [b'|', rest @ ..] => (TokenKind::Or, rest),
+        [b'^', b'=', rest @ ..] => (TokenKind::CaretEqual, rest),
+        [b'^', rest @ ..] => (TokenKind::Caret, rest),
+        [b'~', rest @ ..] => (TokenKind::Tilde, rest),
+        [b'<', b'<', b'=', rest @ ..] => (TokenKind::LessLessEqual, rest),
+        [b'<', b'<', rest @ ..] => (TokenKind::LessLess, rest),
+        [b'>', b'>', b'=', rest @ ..] => (TokenKind::GreaterGreaterEqual, rest),
+        [b'>', b'>', rest @ ..] => (TokenKind::GreaterGreater, rest),
+
+        // Punctuators (comparison operators)
+        [b'=', b'=', rest @ ..] => (TokenKind::EqualEqual, rest),
+        [b'=', rest @ ..] => (TokenKind::Equal, rest),
+
+        [b'!', b'=', rest @ ..] => (TokenKind::BangEqual, rest),
+        [b'!', rest @ ..] => (TokenKind::Bang, rest),
+
+        [b'<', b'=', rest @ ..] => (TokenKind::LessEqual, rest),
+        [b'<', rest @ ..] => (TokenKind::Less, rest),
+
+        [b'>', b'=', rest @ ..] => (TokenKind::GreaterEqual, rest),
+        [b'>', rest @ ..] => (TokenKind::Greater, rest),
+
+        [b'@', rest @ ..] => (TokenKind::Error(Error::UnknownCharacter), rest),
         [0x80..0xE0, rest @ ..] => (TokenKind::Error(Error::UnknownCharacter), &rest[1..]),
         [0xE0..0xF0, rest @ ..] => (TokenKind::Error(Error::UnknownCharacter), &rest[2..]),
         [0xF0..=0xFF, rest @ ..] => (TokenKind::Error(Error::UnknownCharacter), &rest[3..]),
@@ -238,6 +318,11 @@ fn lex_one(text: &str) -> Option<(TokenKind, &str)> {
     Some((kind, rest))
 }
 
+/// Performs "phase 3" of translation (lexing into preprocessing tokens).
+///
+/// Assumes phase 1 (multibyte characters to source character set)
+/// and phase 2 (backslash+newline replaced with newline) have already been
+/// performed
 pub fn lex(mut text: &str) -> impl Iterator<Item = (TokenKind, &str)> {
     std::iter::from_fn(move || {
         let (kind, rest) = lex_one(text)?;
@@ -265,30 +350,76 @@ mod tests {
     }
 
     #[test]
-    fn identifiers() {
-        check("foo _ _1 foo_barBaz12345", expect![[r#"
-            (Identifier, "foo")
-            (Whitespace, " ")
-            (Identifier, "_")
-            (Whitespace, " ")
-            (Identifier, "_1")
-            (Whitespace, " ")
-            (Identifier, "foo_barBaz12345")"#]]);
+    fn empty() { check("", expect![""]); }
+
+    #[test]
+    fn trivia() {
+        check(
+            " \t\n\x0b\x0c// line comment\n/* block /* comment */ // line comment again",
+            expect![[r#"
+                (Whitespace, " \t\n\u{b}\u{c}")
+                (LineComment, "// line comment\n")
+                (BlockComment, "/* block /* comment */")
+                (Whitespace, " ")
+                (LineComment, "// line comment again")"#]],
+        );
     }
 
     #[test]
-    fn punctuators() {
-        check("[](){}.->", expect![[r#"
+    fn number() {
+        check("0123456789", expect![[r#"(Number, "0123456789")"#]]);
+        check(".0.0..0...", expect![[r#"(Number, ".0.0..0...")"#]]);
+        check("0abcdefXZY123_", expect![[r#"(Number, "0abcdefXZY123_")"#]]);
+        check("0'a", expect![[r#"(Number, "0'a")"#]]);
+        check("1..E+3.foo", expect![[r#"(Number, "1..E+3.foo")"#]]);
+        check("0JBK", expect![[r#"(Number, "0JBK")"#]]);
+        check("0JBK'k", expect![[r#"(Number, "0JBK'k")"#]]);
+        check("0JBK'1", expect![[r#"(Number, "0JBK'1")"#]]);
+        check("0JBK'_", expect![[r#"(Number, "0JBK'_")"#]]);
+        check("0JBK'", expect![[r#"
+            (Number, "0JBK")
+            (Error(UnterminatedCharacter), "'")"#]]);
+    }
+
+    #[test]
+    fn punctuators_delimiters() {
+        check("[](){}<::><%%>", expect![[r#"
             (LSquare, "[")
             (RSquare, "]")
             (LParen, "(")
             (RParen, ")")
             (LCurly, "{")
             (RCurly, "}")
-            (Dot, ".")
-            (Minus, "-")
-            (Greater, ">")"#]]);
+            (DigraphLSquare, "<:")
+            (DigraphRSquare, ":>")
+            (DigraphLCurly, "<%")
+            (DigraphRCurly, "%>")"#]]);
+    }
 
+    #[test]
+    fn punctuators_preprocessor_operators() {
+        check("###%:%:%:", expect![[r###"
+            (HashHash, "##")
+            (Hash, "#")
+            (DigraphHashHash, "%:%:")
+            (DigraphHash, "%:")"###]]);
+    }
+
+    #[test]
+    fn punctuators_misc() {
+        check("....->?,;:::", expect![[r#"
+            (DotDotDot, "...")
+            (Dot, ".")
+            (Arrow, "->")
+            (Question, "?")
+            (Comma, ",")
+            (Semicolon, ";")
+            (ColonColon, "::")
+            (Colon, ":")"#]]);
+    }
+
+    #[test]
+    fn punctuators_arithmetic_operators() {
         check("++--&*+-~!", expect![[r#"
             (PlusPlus, "++")
             (MinusMinus, "--")
@@ -298,26 +429,53 @@ mod tests {
             (Minus, "-")
             (Tilde, "~")
             (Bang, "!")"#]]);
+    }
 
-        check("/%<<>><><=>===!=^|&&||", expect![[r#"
-            (Slash, "/")
-            (Percent, "%")
-            (LessLess, "<<")
-            (GreaterGreater, ">>")
-            (Less, "<")
-            (Greater, ">")
-            (LessEqual, "<=")
-            (GreaterEqual, ">=")
-            (EqualEqual, "==")
-            (BangEqual, "!=")
-            (Caret, "^")
-            (Or, "|")
-            (AndAnd, "&&")
-            (OrOr, "||")"#]]);
+    #[test]
+    fn punctuators_logical_operators() {
+        check("&&||", expect![[r#"
+        (AndAnd, "&&")
+        (OrOr, "||")"#]]);
+    }
 
-        check(",###", expect![[r###"
-            (Comma, ",")
-            (HashHash, "##")
-            (Hash, "#")"###]]);
+    #[test]
+    fn punctuators_bitwise_operators() {
+        check("&=&|==^=^~<<=<<>>=>>", expect![[r#"
+        (AndEqual, "&=")
+        (And, "&")
+        (OrEqual, "|=")
+        (Equal, "=")
+        (CaretEqual, "^=")
+        (Caret, "^")
+        (Tilde, "~")
+        (LessLessEqual, "<<=")
+        (LessLess, "<<")
+        (GreaterGreaterEqual, ">>=")
+        (GreaterGreater, ">>")"#]]);
+    }
+
+    #[test]
+    fn punctuators_comparison_operators() {
+        check("===!=!<=<>=>", expect![[r#"
+        (EqualEqual, "==")
+        (Equal, "=")
+        (BangEqual, "!=")
+        (Bang, "!")
+        (LessEqual, "<=")
+        (Less, "<")
+        (GreaterEqual, ">=")
+        (Greater, ">")"#]]);
+    }
+
+    #[test]
+    fn identifiers() {
+        check("foo _ _1 foo_barBaz12345", expect![[r#"
+            (Identifier, "foo")
+            (Whitespace, " ")
+            (Identifier, "_")
+            (Whitespace, " ")
+            (Identifier, "_1")
+            (Whitespace, " ")
+            (Identifier, "foo_barBaz12345")"#]]);
     }
 }
