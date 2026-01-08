@@ -78,9 +78,7 @@ where
 }
 
 fn value<'tokens, F, T>(tokens: &'tokens [Token], ok: &mut Cont<F>, err: ErrCont<'tokens, T>) -> T
-where
-    F: FnMut(Json, &'tokens [Token]) -> T,
-{
+where F: FnMut(Json, &'tokens [Token]) -> T {
     let [token, rest @ ..] = tokens else {
         return err(("unexpected EOF; expected JSON value", tokens));
     };
@@ -124,7 +122,11 @@ where
     }
 }
 
-fn kv_pair<'tokens, F, T>(tokens: &'tokens [Token], ok: &mut Cont<F>, err: ErrCont<'tokens, T>) -> T
+fn kv_pair<'tokens, F, T>(
+    tokens: &'tokens [Token],
+    ok: &mut Cont<F>,
+    err: ErrCont<'tokens, T>,
+) -> T
 where
     F: FnMut(Json, &'tokens [Token]) -> T,
 {

@@ -13,16 +13,21 @@ enum State<'a> {
 }
 
 enum Frame<'a> {
-    /// After you've finished evaluating the function, remember to evaluate the argument
+    /// After you've finished evaluating the function, remember to evaluate the
+    /// argument
     AppArg { arg: Expr<'a> },
-    /// After you've finished evaluating the argument, remember to apply the function to the argument
+    /// After you've finished evaluating the argument, remember to apply the
+    /// function to the argument
     AppFun { fun: Value<'a> },
-    /// After you've finished evaluating the function body, remember to restore the previous environment.
+    /// After you've finished evaluating the function body, remember to restore
+    /// the previous environment.
     AppRestore { env: Vec<Value<'a>> },
 
-    /// After you've finished evaluating the let initializer, remember to evaluate the body
+    /// After you've finished evaluating the let initializer, remember to
+    /// evaluate the body
     LetBody { body: Expr<'a> },
-    /// After you've finished evaluating the let body, remember to pop the let-bound variable off the environment.
+    /// After you've finished evaluating the let body, remember to pop the
+    /// let-bound variable off the environment.
     LetPop {},
 }
 
@@ -55,7 +60,8 @@ fn step<'a>(state: State<'a>, env: &mut Vec<Value<'a>>, stack: &mut Vec<Frame<'a
                 Frame::AppFun { fun } => {
                     let Value::Fun { env: new_env, body } = fun else {
                         panic!(
-                            "Bad function application (tried to apply `{fun:?}`, which is not a function"
+                            "Bad function application (tried to apply `{fun:?}`, which is not a \
+                             function"
                         )
                     };
 

@@ -113,9 +113,7 @@ fn object_loop<T: 'static>(
     }
 }
 
-pub fn parse(tokens: &[Token]) -> PResult<'_, Json> {
-    value(tokens, Box::new(|x| x))
-}
+pub fn parse(tokens: &[Token]) -> PResult<'_, Json> { value(tokens, Box::new(|x| x)) }
 
 #[cfg(test)]
 mod tests {
