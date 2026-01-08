@@ -1,0 +1,6 @@
+package.name = "c-lexer"
+package.edition.workspace = true
+lints.workspace = true
+
+[dev-dependencies]
+expect-test = "1.5.1"

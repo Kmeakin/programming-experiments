@@ -15,3 +15,4 @@ must_use_candidate = { level = "allow", priority = 100 }
 missing_panics_doc = { level = "allow", priority = 100 }
 missing_errors_doc = { level = "allow", priority = 100 }
 option_if_let_else = { level = "allow", priority = 100 }
+too_many_lines = { level = "allow", priority = 100 }
