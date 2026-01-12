@@ -1,13 +1,14 @@
-// Punctuators:
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum TokenKind {
     // Trivia
     // @ ` \
     Error(Error),
 
-    // space, horizontal tab, new-line, vertical tab (0x0b), form-feed (0x0c)
-    Whitespace,
+    // space, horizontal tab, vertical tab (0x0b), form-feed (0x0c)
+    HorizontalWhitespace,
+    /// new-line
+    VerticalWhitespace,
+
     // //
     LineComment,
     // /* */
@@ -138,21 +139,21 @@ fn lex_one(text: &str) -> Option<(TokenKind, &str)> {
         [] => return None,
 
         // Whitespace
-        [b' ' | b'\t' | b'\n' | 0x0b | 0x0c, rest @ ..] => {
+        [b' ' | b'\t' | 0x0b | 0x0c, rest @ ..] => {
             let mut bytes = rest;
             while let [b' ' | b'\t' | b'\n' | 0x0b | 0x0c, rest @ ..] = bytes {
                 bytes = rest;
             }
-            (TokenKind::Whitespace, bytes)
+            (TokenKind::HorizontalWhitespace, bytes)
         }
+        [b'\n', rest @ ..] => (TokenKind::VerticalWhitespace, rest),
 
         // Comments
         [b'/', b'/', rest @ ..] => {
             let mut bytes = rest;
             loop {
                 match bytes {
-                    [] => break (TokenKind::LineComment, bytes),
-                    [b'\n', rest @ ..] => break (TokenKind::LineComment, rest),
+                    [] | [b'\n', ..] => break (TokenKind::LineComment, bytes),
                     [_, rest @ ..] => bytes = rest,
                 }
             }
@@ -357,10 +358,11 @@ mod tests {
         check(
             " \t\n\x0b\x0c// line comment\n/* block /* comment */ // line comment again",
             expect![[r#"
-                (Whitespace, " \t\n\u{b}\u{c}")
-                (LineComment, "// line comment\n")
+                (HorizontalWhitespace, " \t\n\u{b}\u{c}")
+                (LineComment, "// line comment")
+                (VerticalWhitespace, "\n")
                 (BlockComment, "/* block /* comment */")
-                (Whitespace, " ")
+                (HorizontalWhitespace, " ")
                 (LineComment, "// line comment again")"#]],
         );
     }
@@ -471,11 +473,93 @@ mod tests {
     fn identifiers() {
         check("foo _ _1 foo_barBaz12345", expect![[r#"
             (Identifier, "foo")
-            (Whitespace, " ")
+            (HorizontalWhitespace, " ")
             (Identifier, "_")
-            (Whitespace, " ")
+            (HorizontalWhitespace, " ")
             (Identifier, "_1")
-            (Whitespace, " ")
+            (HorizontalWhitespace, " ")
             (Identifier, "foo_barBaz12345")"#]]);
+    }
+
+    #[test]
+    fn directives() {
+        check("#foo bar", expect![[r##"
+            (Hash, "#")
+            (Identifier, "foo")
+            (HorizontalWhitespace, " ")
+            (Identifier, "bar")"##]]);
+    }
+
+    #[test]
+    fn include() {
+        check(r#"#include"foo""#, expect![[r##"
+            (Hash, "#")
+            (Identifier, "include")
+            (String, "\"foo\"")"##]]);
+
+        check(r#"#include "foo""#, expect![[r##"
+            (Hash, "#")
+            (Identifier, "include")
+            (HorizontalWhitespace, " ")
+            (String, "\"foo\"")"##]]);
+
+        check(r"#include<foo>", expect![[r##"
+            (Hash, "#")
+            (Identifier, "include")
+            (Less, "<")
+            (Identifier, "foo")
+            (Greater, ">")"##]]);
+
+        check(r"#include <foo>", expect![[r##"
+            (Hash, "#")
+            (Identifier, "include")
+            (HorizontalWhitespace, " ")
+            (Less, "<")
+            (Identifier, "foo")
+            (Greater, ">")"##]]);
+    }
+
+    #[test]
+    fn embed() {
+        check(r#"#embed"foo""#, expect![[r##"
+            (Hash, "#")
+            (Identifier, "embed")
+            (String, "\"foo\"")"##]]);
+
+        check(r#"#embed "foo""#, expect![[r##"
+            (Hash, "#")
+            (Identifier, "embed")
+            (HorizontalWhitespace, " ")
+            (String, "\"foo\"")"##]]);
+
+        check(r"#embed<foo>", expect![[r##"
+            (Hash, "#")
+            (Identifier, "embed")
+            (Less, "<")
+            (Identifier, "foo")
+            (Greater, ">")"##]]);
+
+        check(r"#embed <foo>", expect![[r##"
+            (Hash, "#")
+            (Identifier, "embed")
+            (HorizontalWhitespace, " ")
+            (Less, "<")
+            (Identifier, "foo")
+            (Greater, ">")"##]]);
+    }
+
+    #[test]
+    fn has_include() {
+        check("#if __has_include (<foo>)", expect![[r##"
+            (Hash, "#")
+            (Identifier, "if")
+            (HorizontalWhitespace, " ")
+            (Identifier, "__has_include")
+            (HorizontalWhitespace, " ")
+            (LParen, "(")
+            (Less, "<")
+            (Identifier, "foo")
+            (Greater, ">")
+            (RParen, ")")"##]]);
     }
 }
