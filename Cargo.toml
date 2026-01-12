@@ -9,9 +9,11 @@ clippy.pedantic            = { level = "warn", priority = -1 }
 rust.unused_qualifications = { level = "warn", priority = -1 }
 rustdoc.all                = { level = "warn", priority = -1 }
 
-clippy.missing_errors_doc = { level = "allow" }
-clippy.missing_panics_doc = { level = "allow" }
-clippy.must_use_candidate = { level = "allow" }
-clippy.option_if_let_else = { level = "allow" }
-clippy.too_many_lines     = { level = "allow" }
-clippy.type_complexity    = { level = "allow" }
+clippy.cast_precision_loss = { level = "allow" }
+clippy.missing_errors_doc  = { level = "allow" }
+clippy.missing_panics_doc  = { level = "allow" }
+clippy.must_use_candidate  = { level = "allow" }
+clippy.option_if_let_else  = { level = "allow" }
+clippy.similar_names       = { level = "allow" }
+clippy.too_many_lines      = { level = "allow" }
+clippy.type_complexity     = { level = "allow" }
