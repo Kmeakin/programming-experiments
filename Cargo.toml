@@ -15,5 +15,9 @@ clippy.missing_panics_doc  = { level = "allow" }
 clippy.must_use_candidate  = { level = "allow" }
 clippy.option_if_let_else  = { level = "allow" }
 clippy.similar_names       = { level = "allow" }
+clippy.single_match_else   = { level = "allow" }
 clippy.too_many_lines      = { level = "allow" }
 clippy.type_complexity     = { level = "allow" }
+
+[workspace.dependencies]
+expect-test = { version = "1.5.1" }

@@ -10,3 +10,6 @@ the stack versus managing the call stack manually.
 A lexer for the C programming language as specified by the C23 revision of the ISO standard.
 Currently very unoptimized.
 May be extended to preprocessor later if I have enough energy.
+
+# crates/expr-parser
+Lexer and parser for a C-like expression language.

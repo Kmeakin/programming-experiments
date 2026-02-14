@@ -1,6 +1,6 @@
 lints.workspace           = true
 package.edition.workspace = true
-package.name              = "c-lexer"
+package.name              = "expr-parser"
 
 [dev-dependencies]
 expect-test.workspace = true
