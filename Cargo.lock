@@ -30,6 +30,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "expr-parser"
+version = "0.0.0"
+dependencies = [
+ "expect-test",
+]
+
+[[package]]
 name = "json-parser"
 version = "0.0.0"
 
