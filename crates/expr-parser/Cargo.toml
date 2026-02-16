@@ -4,3 +4,6 @@ package.name              = "expr-parser"
 
 [dev-dependencies]
 expect-test.workspace = true
+
+[dependencies]
+memchr = { version = "2.8.0" }

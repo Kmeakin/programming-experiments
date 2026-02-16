@@ -81,8 +81,8 @@ pub enum ErrorKind {
 }
 
 pub trait TokenSink {
-    fn token(&mut self, kind: TokenKind, text: &str);
-    fn error(&mut self, kind: ErrorKind, text: &str);
+    fn token(&mut self, _kind: TokenKind, _text: &str) {}
+    fn error(&mut self, _kind: ErrorKind, _text: &str) {}
 }
 
 impl<Sink: TokenSink> TokenSink for &mut Sink {
@@ -94,10 +94,15 @@ fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> Option<&str> {
     #[allow(clippy::enum_glob_use)]
     use {ErrorKind::*, TokenKind::*};
 
+    let split = |rest| {
+        let rest = unsafe { str::from_utf8_unchecked(rest) };
+        let token_text = unsafe { text.get_unchecked(..(text.len() - rest.len())) };
+        (token_text, rest)
+    };
+
     macro_rules! token {
         ($kind:expr, $rest:expr) => {{
-            let rest = unsafe { str::from_utf8_unchecked($rest) };
-            let token_text = &text[..(text.len() - rest.len())];
+            let (token_text, rest) = split($rest);
             sink.token($kind, token_text);
             Some(rest)
         }};
@@ -105,8 +110,7 @@ fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> Option<&str> {
 
     macro_rules! error {
         ($kind:expr, $rest:expr) => {{
-            let rest = unsafe { str::from_utf8_unchecked($rest) };
-            let token_text = &text[..(text.len() - rest.len())];
+            let (token_text, rest) = split($rest);
             sink.error($kind, token_text);
             Some(rest)
         }};
@@ -127,35 +131,26 @@ fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> Option<&str> {
         [b'\n', rest @ ..] => token!(VerticalWhitespace, rest),
 
         // Comments
-        [b'/', b'/', rest @ ..] => {
-            let mut bytes = rest;
-            loop {
-                match bytes {
-                    [] | [b'\n', ..] => break token!(LineComment, bytes),
-                    [_, rest @ ..] => bytes = rest,
-                }
-            }
-        }
+        [b'/', b'/', rest @ ..] => match memchr::memchr(b'\n', rest) {
+            None => token!(LineComment, &rest[rest.len()..]),
+            Some(pos) => token!(LineComment, &rest[pos..]),
+        },
         [b'/', b'*', rest @ ..] => {
-            let mut bytes = rest;
             let mut depth = 1u32;
-            loop {
-                match bytes {
-                    [] => break error!(UnterminatedBlockComment, bytes),
-                    [b'/', b'*', rest @ ..] => {
-                        bytes = rest;
-                        depth += 1;
+            for pos in memchr::memchr_iter(b'/', rest) {
+                // "*/"
+                if pos > 0 && rest[pos - 1] == b'*' {
+                    depth -= 1;
+                    if depth == 0 {
+                        return token!(BlockComment, &rest[pos + 1..]);
                     }
-                    [b'*', b'/', rest @ ..] => {
-                        bytes = rest;
-                        depth -= 1;
-                        if depth == 0 {
-                            break token!(BlockComment, bytes);
-                        }
-                    }
-                    [_, rest @ ..] => bytes = rest,
+                }
+                // "/*"
+                else if rest.get(pos + 1) == Some(&b'*') {
+                    depth += 1;
                 }
             }
+            error!(UnterminatedBlockComment, &rest[rest.len()..])
         }
 
         // Literals
@@ -165,7 +160,7 @@ fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> Option<&str> {
             loop {
                 match bytes {
                     [] => break error!(UnterminatedCharacter, bytes),
-                    [b'"', rest @ ..] => break token!(Character, rest),
+                    [b'\'', rest @ ..] => break token!(Character, rest),
                     [b'\\', _, rest @ ..] | [_, rest @ ..] => bytes = rest,
                 }
             }
