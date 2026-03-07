@@ -10,3 +10,8 @@ the stack versus managing the call stack manually.
 A lexer for the C programming language as specified by the C23 revision of the ISO standard.
 Currently very unoptimized.
 May be extended to preprocessor later if I have enough energy.
+
+# crates/fast-lexer
+A lexer for a Rust-like language.
+Trying to see what the upper speed-limit for a lexer should be.
+Inspired by https://github.com/Validark/Accelerated-Zig-Parser.
