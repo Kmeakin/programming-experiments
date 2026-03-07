@@ -1,3 +1,5 @@
+use std::ops::ControlFlow;
+
 use expr_parser::lexer::{ErrorKind, TokenKind, TokenSink};
 
 struct TokenCounter {
@@ -6,17 +8,27 @@ struct TokenCounter {
 }
 
 impl TokenSink for TokenCounter {
-    fn token(&mut self, _kind: TokenKind, _text: &str) { self.tokens += 1; }
-    fn error(&mut self, _kind: ErrorKind, _text: &str) { self.errors += 1; }
+    type Break = std::convert::Infallible;
+    fn token(&mut self, _kind: TokenKind, _text: &str) -> ControlFlow<Self::Break> {
+        self.tokens += 1;
+        ControlFlow::Continue(())
+    }
+    fn error(&mut self, _kind: ErrorKind, _text: &str) -> ControlFlow<Self::Break> {
+        self.errors += 1;
+        ControlFlow::Continue(())
+    }
 }
 
 struct Printer {}
 impl TokenSink for Printer {
-    fn token(&mut self, kind: TokenKind, text: &str) {
+    type Break = std::convert::Infallible;
+    fn token(&mut self, kind: TokenKind, text: &str) -> ControlFlow<Self::Break> {
         println!("Token: {kind:?}\t{text:?}");
+        ControlFlow::Continue(())
     }
-    fn error(&mut self, kind: ErrorKind, text: &str) {
+    fn error(&mut self, kind: ErrorKind, text: &str) -> ControlFlow<Self::Break> {
         println!("Error: {kind:?}\t{text:?}");
+        ControlFlow::Continue(())
     }
 }
 

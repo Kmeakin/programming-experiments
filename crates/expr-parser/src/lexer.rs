@@ -1,8 +1,8 @@
+use std::ops::ControlFlow;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[rustfmt::skip]
 pub enum TokenKind {
-    Error(ErrorKind),
-
     // Trivia:
     HorizontalWhitespace,
     VerticalWhitespace,
@@ -81,16 +81,27 @@ pub enum ErrorKind {
 }
 
 pub trait TokenSink {
-    fn token(&mut self, _kind: TokenKind, _text: &str) {}
-    fn error(&mut self, _kind: ErrorKind, _text: &str) {}
+    type Break;
+
+    fn token(&mut self, _kind: TokenKind, _text: &str) -> ControlFlow<Self::Break> {
+        ControlFlow::Continue(())
+    }
+    fn error(&mut self, _kind: ErrorKind, _text: &str) -> ControlFlow<Self::Break> {
+        ControlFlow::Continue(())
+    }
 }
 
 impl<Sink: TokenSink> TokenSink for &mut Sink {
-    fn token(&mut self, kind: TokenKind, text: &str) { Sink::token(self, kind, text); }
-    fn error(&mut self, kind: ErrorKind, text: &str) { Sink::error(self, kind, text); }
+    type Break = Sink::Break;
+    fn token(&mut self, kind: TokenKind, text: &str) -> ControlFlow<Self::Break> {
+        Sink::token(self, kind, text)
+    }
+    fn error(&mut self, kind: ErrorKind, text: &str) -> ControlFlow<Self::Break> {
+        Sink::error(self, kind, text)
+    }
 }
 
-fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> Option<&str> {
+fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> ControlFlow<Sink::Break, Option<&str>> {
     #[allow(clippy::enum_glob_use)]
     use {ErrorKind::*, TokenKind::*};
 
@@ -103,22 +114,22 @@ fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> Option<&str> {
     macro_rules! token {
         ($kind:expr, $rest:expr) => {{
             let (token_text, rest) = split($rest);
-            sink.token($kind, token_text);
-            Some(rest)
+            sink.token($kind, token_text)?;
+            ControlFlow::Continue(Some(rest))
         }};
     }
 
     macro_rules! error {
         ($kind:expr, $rest:expr) => {{
             let (token_text, rest) = split($rest);
-            sink.error($kind, token_text);
-            Some(rest)
+            sink.error($kind, token_text)?;
+            ControlFlow::Continue(Some(rest))
         }};
     }
 
     let bytes = text.as_bytes();
     match bytes {
-        [] => None,
+        [] => ControlFlow::Continue(None),
 
         // Whitespace
         [b' ' | b'\t', rest @ ..] => {
@@ -133,16 +144,16 @@ fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> Option<&str> {
         // Comments
         [b'/', b'/', rest @ ..] => match memchr::memchr(b'\n', rest) {
             None => token!(LineComment, &rest[rest.len()..]),
-            Some(pos) => token!(LineComment, &rest[pos..]),
+            Some(pos) => token!(LineComment, unsafe { rest.get_unchecked(pos..) }),
         },
         [b'/', b'*', rest @ ..] => {
             let mut depth = 1u32;
             for pos in memchr::memchr_iter(b'/', rest) {
                 // "*/"
-                if pos > 0 && rest[pos - 1] == b'*' {
+                if pos > 0 && unsafe { *rest.get_unchecked(pos - 1) } == b'*' {
                     depth -= 1;
                     if depth == 0 {
-                        return token!(BlockComment, &rest[pos + 1..]);
+                        return token!(BlockComment, unsafe { rest.get_unchecked(pos + 1..) });
                     }
                 }
                 // "/*"
@@ -258,9 +269,9 @@ fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> Option<&str> {
         [b'>', rest @ ..] => token!(Greater, rest),
 
         [..0x20 | 0x7f, rest @ ..] => error!(AsciiControl, rest),
-        [0x80..0xE0, rest @ ..] => error!(UnknownCharacter, &rest[1..]),
-        [0xE0..0xF0, rest @ ..] => error!(UnknownCharacter, &rest[2..]),
-        [0xF0..=0xFF, rest @ ..] => error!(UnknownCharacter, &rest[3..]),
+        [0x80..0xE0, rest @ ..] => error!(UnknownCharacter, unsafe { rest.get_unchecked(1..) }),
+        [0xE0..0xF0, rest @ ..] => error!(UnknownCharacter, unsafe { rest.get_unchecked(2..) }),
+        [0xF0..=0xFF, rest @ ..] => error!(UnknownCharacter, unsafe { rest.get_unchecked(3..) }),
 
         [b'$' | b'\\' | b'`' | b'@' | b'#', rest @ ..] => {
             error!(UnknownCharacter, rest)
@@ -268,10 +279,26 @@ fn lex_one<Sink: TokenSink>(text: &str, mut sink: Sink) -> Option<&str> {
     }
 }
 
-pub fn lex<Sink: TokenSink>(mut text: &str, mut sink: Sink) {
-    while let Some(rest) = lex_one(text, &mut sink) {
+pub fn lex_step(text: &str) -> Option<TokenKind> {
+    struct Sink;
+    impl TokenSink for Sink {
+        type Break = TokenKind;
+        fn token(&mut self, kind: TokenKind, _text: &str) -> ControlFlow<Self::Break> {
+            ControlFlow::Break(kind)
+        }
+    }
+
+    match lex_one(text, Sink) {
+        ControlFlow::Continue(_) => None,
+        ControlFlow::Break(token) => Some(token),
+    }
+}
+
+pub fn lex<Sink: TokenSink>(mut text: &str, mut sink: Sink) -> ControlFlow<Sink::Break> {
+    while let Some(rest) = lex_one(text, &mut sink)? {
         text = rest;
     }
+    ControlFlow::Continue(())
 }
 
 #[cfg(test)]
@@ -287,12 +314,16 @@ mod tests {
         use std::fmt::Write;
         struct Sink(String);
         impl TokenSink for Sink {
-            fn token(&mut self, kind: TokenKind, text: &str) {
+            type Break = std::convert::Infallible;
+
+            fn token(&mut self, kind: TokenKind, text: &str) -> ControlFlow<Self::Break> {
                 writeln!(self.0, "({kind:?}, {text:?})").unwrap();
+                ControlFlow::Continue(())
             }
 
-            fn error(&mut self, kind: ErrorKind, text: &str) {
+            fn error(&mut self, kind: ErrorKind, text: &str) -> ControlFlow<Self::Break> {
                 writeln!(self.0, "({kind:?}, {text:?})").unwrap();
+                ControlFlow::Continue(())
             }
         }
 
