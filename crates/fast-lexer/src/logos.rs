@@ -5,10 +5,10 @@ use logos::Logos;
 #[rustfmt::skip]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[derive(Logos)]
-#[logos(skip r"[ \t\n]+")]
 pub enum TokenKind {
     Error,
 
+    #[regex(r"[ \t\n]+")] Whitespace,
     #[regex(r"//[^\n]*\n?", allow_greedy = true)] LineComment,
 
     // Balanced delimiters
@@ -88,7 +88,7 @@ pub fn lex_iter(input: &str) -> impl Iterator<Item = (TokenKind, Range<u32>, &st
     debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
 
     logos::Lexer::new(input).spanned().map(|(kind, span)| {
-        let substring = &input[span.clone()];
+        let substring = unsafe { input.get_unchecked(span.clone()) };
         let span = span.start as u32..span.end as u32;
         let kind = match kind {
             Ok(kind) => kind,
@@ -117,7 +117,7 @@ mod tests {
     fn empty() { check("", &expect![""]); }
 
     #[test]
-    fn whitespace() { check(" \t\n", &expect![""]); }
+    fn whitespace() { check(" \t\n", &expect![[r#"Whitespace(0..3, " \t\n")"#]]); }
 
     #[test]
     fn comments() {
@@ -125,7 +125,9 @@ mod tests {
             // Line comment newline
             // Line comment EOF";
         check(input, &expect![[r#"
+            Whitespace(0..13, "\n            ")
             LineComment(13..37, "// Line comment newline\n")
+            Whitespace(37..49, "            ")
             LineComment(49..68, "// Line comment EOF")"#]]);
     }
 
@@ -156,37 +158,69 @@ mod tests {
             = == ! != < <= << <<= > >= >> >>=
             ? ~";
         check(input, &expect![[r#"
+            Whitespace(0..13, "\n            ")
             Plus(13..14, "+")
+            Whitespace(14..15, " ")
             PlusEq(15..17, "+=")
+            Whitespace(17..18, " ")
             Minus(18..19, "-")
+            Whitespace(19..20, " ")
             MinusEq(20..22, "-=")
+            Whitespace(22..23, " ")
             Star(23..24, "*")
+            Whitespace(24..25, " ")
             StarEq(25..27, "*=")
+            Whitespace(27..28, " ")
             Slash(28..29, "/")
+            Whitespace(29..30, " ")
             SlashEq(30..32, "/=")
+            Whitespace(32..33, " ")
             Percent(33..34, "%")
+            Whitespace(34..35, " ")
             PercentEq(35..37, "%=")
+            Whitespace(37..50, "\n            ")
             And(50..51, "&")
+            Whitespace(51..52, " ")
             AndEq(52..54, "&=")
+            Whitespace(54..55, " ")
             AndAnd(55..57, "&&")
+            Whitespace(57..58, " ")
             Or(58..59, "|")
+            Whitespace(59..60, " ")
             OrEq(60..62, "|=")
+            Whitespace(62..63, " ")
             OrOr(63..65, "||")
+            Whitespace(65..66, " ")
             Caret(66..67, "^")
+            Whitespace(67..68, " ")
             CaretEq(68..70, "^=")
+            Whitespace(70..83, "\n            ")
             Eq(83..84, "=")
+            Whitespace(84..85, " ")
             EqEq(85..87, "==")
+            Whitespace(87..88, " ")
             Not(88..89, "!")
+            Whitespace(89..90, " ")
             NotEq(90..92, "!=")
+            Whitespace(92..93, " ")
             Lt(93..94, "<")
+            Whitespace(94..95, " ")
             LtEq(95..97, "<=")
+            Whitespace(97..98, " ")
             LtLt(98..100, "<<")
+            Whitespace(100..101, " ")
             LtLtEq(101..104, "<<=")
+            Whitespace(104..105, " ")
             Gt(105..106, ">")
+            Whitespace(106..107, " ")
             GtEq(107..109, ">=")
+            Whitespace(109..110, " ")
             GtGt(110..112, ">>")
+            Whitespace(112..113, " ")
             GtGtEq(113..116, ">>=")
+            Whitespace(116..129, "\n            ")
             Question(129..130, "?")
+            Whitespace(130..131, " ")
             Tilde(131..132, "~")"#]]);
     }
 
@@ -203,7 +237,9 @@ mod tests {
         let input = "foo bar123 _baz";
         check(input, &expect![[r#"
             Ident(0..3, "foo")
+            Whitespace(3..4, " ")
             Ident(4..10, "bar123")
+            Whitespace(10..11, " ")
             Ident(11..15, "_baz")"#]]);
     }
 
@@ -218,7 +254,9 @@ mod tests {
     fn string_literals() {
         check(r#""hello" "escapes \" \' \n \\" """#, &expect![[r#"
             String(0..7, "\"hello\"")
+            Whitespace(7..8, " ")
             String(8..29, "\"escapes \\\" \\' \\n \\\\\"")
+            Whitespace(29..30, " ")
             String(30..32, "\"\"")"#]]);
     }
 
@@ -226,7 +264,9 @@ mod tests {
     fn char_literals() {
         check(r#"'hello' 'escapes \" \' \n \\' ''"#, &expect![[r#"
             Char(0..7, "'hello'")
+            Whitespace(7..8, " ")
             Char(8..29, "'escapes \\\" \\' \\n \\\\'")
+            Whitespace(29..30, " ")
             Char(30..32, "''")"#]]);
     }
 }
