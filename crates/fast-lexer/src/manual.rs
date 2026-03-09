@@ -63,20 +63,39 @@ pub enum TokenKind {
     Underscore,
 }
 
+fn whitespace(mut bytes: &[u8]) -> usize {
+    let orig_len = bytes.len();
+
+    while let Some(rest) = bytes.strip_prefix(&[b' '; 4]) {
+        bytes = rest;
+    }
+
+    while let [b' ' | b'\n' | b'\t', rest @ ..] = bytes {
+        bytes = rest;
+    }
+
+    orig_len - bytes.len()
+}
+
+#[inline]
+fn line_comment(bytes: &[u8]) -> usize {
+    match memchr::memchr(b'\n', bytes) {
+        Some(pos) => pos + 1,
+        None => bytes.len(),
+    }
+}
+
 fn lex_one(input: &str) -> Option<(TokenKind, usize)> {
-    let bytes = input.as_bytes();
-    let [b1, bytes @ ..] = bytes else {
+    let bytes0 = input.as_bytes();
+    let [byte0, bytes1 @ ..] = bytes0 else {
         return None;
     };
 
-    let mut bytes = bytes;
+    let mut bytes1 = bytes1;
     let mut len = 1;
-    let (kind, len) = match *b1 {
+    let (kind, len) = match *byte0 {
         b' ' | b'\n' | b'\t' => {
-            while let [b' ' | b'\n' | b'\t', rest @ ..] = bytes {
-                len += 1;
-                bytes = rest;
-            }
+            let len = whitespace(bytes0);
             (TokenKind::Whitespace, len)
         }
         b'(' => (TokenKind::LParen, 1),
@@ -88,65 +107,59 @@ fn lex_one(input: &str) -> Option<(TokenKind, usize)> {
         b',' => (TokenKind::Comma, 1),
         b';' => (TokenKind::Semicolon, 1),
         b':' => (TokenKind::Colon, 1),
-        b'+' => match bytes {
+        b'+' => match bytes1 {
             [b'=', ..] => (TokenKind::PlusEq, 2),
             _ => (TokenKind::Plus, 1),
         },
-        b'-' => match bytes {
+        b'-' => match bytes1 {
             [b'=', ..] => (TokenKind::MinusEq, 2),
             _ => (TokenKind::Minus, 1),
         },
-        b'*' => match bytes {
+        b'*' => match bytes1 {
             [b'=', ..] => (TokenKind::StarEq, 2),
             _ => (TokenKind::Star, 1),
         },
-        b'/' => match bytes {
+        b'/' => match bytes1 {
             [b'=', ..] => (TokenKind::SlashEq, 2),
-            [b'/', ..] => {
-                while let [b, rest @ ..] = bytes {
-                    len += 1;
-                    bytes = rest;
-                    if *b == b'\n' {
-                        break;
-                    }
-                }
+            [b'/', bytes2 @ ..] => {
+                let len = line_comment(bytes2) + 2;
                 (TokenKind::LineComment, len)
             }
             _ => (TokenKind::Slash, 1),
         },
-        b'%' => match bytes {
+        b'%' => match bytes1 {
             [b'=', ..] => (TokenKind::PercentEq, 2),
             _ => (TokenKind::Percent, 1),
         },
-        b'&' => match bytes {
+        b'&' => match bytes1 {
             [b'=', ..] => (TokenKind::AndEq, 2),
             [b'&', ..] => (TokenKind::AndAnd, 2),
             _ => (TokenKind::And, 1),
         },
-        b'|' => match bytes {
+        b'|' => match bytes1 {
             [b'|', ..] => (TokenKind::OrOr, 2),
             [b'=', ..] => (TokenKind::OrEq, 2),
             _ => (TokenKind::Or, 1),
         },
-        b'^' => match bytes {
+        b'^' => match bytes1 {
             [b'=', ..] => (TokenKind::CaretEq, 2),
             _ => (TokenKind::Caret, 1),
         },
-        b'=' => match bytes {
+        b'=' => match bytes1 {
             [b'=', ..] => (TokenKind::EqEq, 2),
             _ => (TokenKind::Eq, 1),
         },
-        b'!' => match bytes {
+        b'!' => match bytes1 {
             [b'=', ..] => (TokenKind::NotEq, 2),
             _ => (TokenKind::Not, 1),
         },
-        b'<' => match bytes {
+        b'<' => match bytes1 {
             [b'<', b'=', ..] => (TokenKind::LtLtEq, 3),
             [b'<', ..] => (TokenKind::LtLt, 2),
             [b'=', ..] => (TokenKind::LtEq, 2),
             _ => (TokenKind::Lt, 1),
         },
-        b'>' => match bytes {
+        b'>' => match bytes1 {
             [b'>', b'=', ..] => (TokenKind::GtGtEq, 3),
             [b'>', ..] => (TokenKind::GtGt, 2),
             [b'=', ..] => (TokenKind::GtEq, 2),
@@ -156,33 +169,33 @@ fn lex_one(input: &str) -> Option<(TokenKind, usize)> {
         b'~' => (TokenKind::Tilde, 1),
         b'#' => (TokenKind::Hash, 1),
         b'@' => (TokenKind::At, 1),
-        b'_' => match bytes {
+        b'_' => match bytes1 {
             [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', ..] => {
-                while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = bytes {
+                while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = bytes1 {
                     len += 1;
-                    bytes = rest;
+                    bytes1 = rest;
                 }
                 (TokenKind::Ident, len)
             }
             _ => (TokenKind::Underscore, 1),
         },
         b'0'..=b'9' => {
-            while let [b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_', rest @ ..] = bytes {
+            while let [b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_', rest @ ..] = bytes1 {
                 len += 1;
-                bytes = rest;
+                bytes1 = rest;
             }
             (TokenKind::Int, len)
         }
         b'a'..=b'z' | b'A'..=b'Z' => {
-            while let [b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_', rest @ ..] = bytes {
+            while let [b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_', rest @ ..] = bytes1 {
                 len += 1;
-                bytes = rest;
+                bytes1 = rest;
             }
             (TokenKind::Ident, len)
         }
         b'"' => {
             loop {
-                match bytes {
+                match bytes1 {
                     [b'"', ..] => {
                         len += 1;
                         break;
@@ -190,11 +203,11 @@ fn lex_one(input: &str) -> Option<(TokenKind, usize)> {
                     | [] => break,
                     [b'\\', _, rest @ ..] => {
                         len += 2;
-                        bytes = rest;
+                        bytes1 = rest;
                     }
                     [_, rest @ ..] => {
                         len += 1;
-                        bytes = rest;
+                        bytes1 = rest;
                     }
                 }
             }
@@ -202,7 +215,7 @@ fn lex_one(input: &str) -> Option<(TokenKind, usize)> {
         }
         b'\'' => {
             loop {
-                match bytes {
+                match bytes1 {
                     [b'\'', ..] => {
                         len += 1;
                         break;
@@ -210,11 +223,11 @@ fn lex_one(input: &str) -> Option<(TokenKind, usize)> {
                     | [] => break,
                     [b'\\', _, rest @ ..] => {
                         len += 2;
-                        bytes = rest;
+                        bytes1 = rest;
                     }
                     [_, rest @ ..] => {
                         len += 1;
-                        bytes = rest;
+                        bytes1 = rest;
                     }
                 }
             }
@@ -234,8 +247,8 @@ pub fn lex_iter(
         let start = pos;
         let end = pos + len;
         let range = start..end;
-        let substring = &input[..len];
-        input = &input[len..];
+        let (substring, rest) = unsafe { input.split_at_checked(len).unwrap_unchecked() };
+        input = rest;
         pos = end;
         Some((kind, range, substring))
     })

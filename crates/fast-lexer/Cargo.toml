@@ -5,6 +5,7 @@ version           = "0.1.0"
 
 [dependencies]
 logos = "0.16.1"
+memchr = "2.8.0"
 
 [lints]
 workspace = true

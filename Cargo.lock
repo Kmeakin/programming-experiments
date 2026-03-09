@@ -273,6 +273,7 @@ dependencies = [
  "divan",
  "expect-test",
  "logos",
+ "memchr",
 ]
 
 [[package]]
