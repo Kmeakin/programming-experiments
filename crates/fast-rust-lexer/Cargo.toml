@@ -1,0 +1,21 @@
+[package]
+edition.workspace = true
+name              = "fast-rust-lexer"
+version           = "0.1.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+logos              = { version = "0.16.1" }
+memchr             = { version = "2.8.0" }
+unicode-ident      = { version = "1.0.24" }
+unicode-properties = { version = "0.1.4" }
+
+[dev-dependencies]
+criterion = { version = "0.8.2" }
+expect-test = "1.5.1"
+
+[[bench]]
+harness = false
+name    = "lexer"
