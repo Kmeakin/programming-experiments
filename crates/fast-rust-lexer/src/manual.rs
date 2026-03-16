@@ -164,45 +164,31 @@ fn double_quote_string(bytes: &[u8]) -> usize {
 }
 
 fn hash_string(mut bytes: &[u8]) -> usize {
+    let orig_len = bytes.len();
     let mut num_hashes = 1;
-    let mut len = 0;
 
     while let [b'#', rest @ ..] = bytes {
-        len += 1;
         num_hashes += 1;
         bytes = rest;
     }
 
-    let [b'"', rest @ ..] = bytes else {
-        return len;
+    let [b'"', bytes @ ..] = bytes else {
+        return bytes.len();
     };
-    len += 1;
-    bytes = rest;
 
-    loop {
-        match bytes {
-            | [] => break,
-            [b'"', rest @ ..] => {
-                len += 1;
-                bytes = rest;
-
-                let mut hashes_left = num_hashes;
-                while let [b'#', rest @ ..] = bytes {
-                    len += 1;
-                    bytes = rest;
-                    hashes_left -= 1;
-                    if hashes_left == 0 {
-                        return len;
-                    }
-                }
-            }
-            [_, rest @ ..] => {
-                len += 1;
-                bytes = rest;
-            }
+    for pos in memchr::memchr_iter(b'"', bytes) {
+        if bytes[pos + 1..]
+            .iter()
+            .take_while(|&&b| b == b'#')
+            .take(num_hashes)
+            .count()
+            == num_hashes
+        {
+            return pos + num_hashes * 2 + 1;
         }
     }
-    len
+
+    orig_len
 }
 
 fn raw_string(bytes: &[u8]) -> usize {
@@ -595,6 +581,9 @@ mod tests {
                 (Whitespace, 84..89, "\n    ")
                 (RawStr, 89..110, "r#\"unterminated\"\n    ")"###]],
         );
+
+        check(r#"r#""#, &expect![[r#"(RawStr, 0..3, "r#\"")"#]]);
+        check(r#"r#"""#, &expect![[r#"(RawStr, 0..4, "r#\"\"")"#]]);
 
         check(
             r###"
