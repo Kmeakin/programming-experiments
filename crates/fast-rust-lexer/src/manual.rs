@@ -150,26 +150,17 @@ fn single_quote_string(bytes: &[u8]) -> usize {
 }
 
 fn double_quote_string(bytes: &[u8]) -> usize {
-    let mut len = 0;
-    let mut bytes = bytes;
-    loop {
-        match bytes {
-            [b'"', ..] => {
-                len += 1;
-                break;
-            }
-            | [] => break,
-            [b'\\', _, rest @ ..] => {
-                len += 2;
-                bytes = rest;
-            }
-            [_, rest @ ..] => {
-                len += 1;
-                bytes = rest;
-            }
+    for pos in memchr::memchr_iter(b'"', bytes) {
+        let backslashes = bytes[..pos]
+            .iter()
+            .rev()
+            .take_while(|&&b| b == b'\\')
+            .count();
+        if backslashes % 2 == 0 {
+            return pos + 1;
         }
     }
-    len
+    bytes.len()
 }
 
 fn hash_string(mut bytes: &[u8]) -> usize {
