@@ -223,13 +223,29 @@ fn ident(bytes: &[u8]) -> usize {
     len
 }
 
-fn number(mut bytes: &[u8]) -> (TokenKind, usize) {
+fn decimal(bytes: &[u8]) -> usize {
     let mut len = 0;
+    let (chunks, mut bytes) = bytes.as_chunks::<16>();
+    for chunk in chunks {
+        let vec = Simd::from_array(*chunk);
+        let mask = !((Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')))
+            | vec.simd_eq(Simd::splat(b'_')));
 
+        match mask.first_set() {
+            None => len += 16,
+            Some(pos) => return len + pos,
+        }
+    }
     while let [b'0'..=b'9' | b'_', rest @ ..] = bytes {
         len += 1;
         bytes = rest;
     }
+    len
+}
+
+fn number(bytes: &[u8]) -> (TokenKind, usize) {
+    let mut len = decimal(bytes);
+    let mut bytes = &bytes[len..];
 
     let mut kind = match bytes {
         [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => TokenKind::Int,
