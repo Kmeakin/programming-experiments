@@ -109,32 +109,21 @@ fn line_comment(bytes: &[u8]) -> usize {
     }
 }
 
-fn block_comment(mut bytes: &[u8]) -> usize {
-    let mut len = 0;
-    let mut depth = 1;
-    loop {
-        match bytes {
-            [b'/', b'*', rest @ ..] => {
-                bytes = rest;
-                len += 2;
-                depth += 1;
+fn block_comment(bytes: &[u8]) -> usize {
+    let mut depth = 1u32;
+
+    for pos in memchr::memchr_iter(b'/', bytes) {
+        if pos > 0 && bytes.get(pos - 1) == Some(&b'*') {
+            depth -= 1;
+            if depth == 0 {
+                return pos + 1;
             }
-            [b'*', b'/', rest @ ..] => {
-                bytes = rest;
-                len += 2;
-                depth -= 1;
-                if depth == 0 {
-                    break;
-                }
-            }
-            [_, rest @ ..] => {
-                bytes = rest;
-                len += 1;
-            }
-            | [] => break,
+        } else if bytes.get(pos + 1) == Some(&b'*') {
+            depth += 1;
         }
     }
-    len
+
+    bytes.len()
 }
 
 fn single_quote_string(bytes: &[u8]) -> usize {
@@ -369,6 +358,41 @@ mod tests {
                 (Whitespace, 95..108, "\n            ")
                 (BlockComment, 108..177, "/* /* unclosed block comment */\n            oh no, still in a comment")"#]],
         );
+
+        check("/* EOF", &expect![[r#"(BlockComment, 0..6, "/* EOF")"#]]);
+        check("/*/ EOF", &expect![[r#"(BlockComment, 0..7, "/*/ EOF")"#]]);
+        check("/**/ EOF", &expect![[r#"
+            (BlockComment, 0..4, "/**/")
+            (Whitespace, 4..5, " ")
+            (Ident, 5..8, "EOF")"#]]);
+        check("/*// EOF", &expect![[
+            r#"(BlockComment, 0..8, "/*// EOF")"#
+        ]]);
+        check("/*/* EOF", &expect![[
+            r#"(BlockComment, 0..8, "/*/* EOF")"#
+        ]]);
+        check("/*/**/ EOF", &expect![[
+            r#"(BlockComment, 0..10, "/*/**/ EOF")"#
+        ]]);
+        check("/*/**/ EOF", &expect![[
+            r#"(BlockComment, 0..10, "/*/**/ EOF")"#
+        ]]);
+        check("/* /* */ */ EOF", &expect![[r#"
+            (BlockComment, 0..11, "/* /* */ */")
+            (Whitespace, 11..12, " ")
+            (Ident, 12..15, "EOF")"#]]);
+        check("/*/* */ */ EOF", &expect![[r#"
+            (BlockComment, 0..10, "/*/* */ */")
+            (Whitespace, 10..11, " ")
+            (Ident, 11..14, "EOF")"#]]);
+        check("/*/* */*/ EOF", &expect![[r#"
+            (BlockComment, 0..9, "/*/* */*/")
+            (Whitespace, 9..10, " ")
+            (Ident, 10..13, "EOF")"#]]);
+        check("/*/* */*/ EOF", &expect![[r#"
+            (BlockComment, 0..9, "/*/* */*/")
+            (Whitespace, 9..10, " ")
+            (Ident, 10..13, "EOF")"#]]);
     }
 
     #[test]
