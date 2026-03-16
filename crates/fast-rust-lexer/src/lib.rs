@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 pub mod logos;
 pub mod manual;
 pub mod rustc;

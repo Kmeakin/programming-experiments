@@ -1,3 +1,5 @@
+use std::simd::prelude::*;
+
 use crate::TokenKind;
 
 pub fn lex_iter(input: &str) -> impl Iterator<Item = (TokenKind, u32)> {
@@ -198,8 +200,22 @@ fn raw_string(bytes: &[u8]) -> usize {
     }
 }
 
-fn ident(mut bytes: &[u8]) -> usize {
+fn ident(bytes: &[u8]) -> usize {
     let mut len = 0;
+
+    let (chunks, mut bytes) = bytes.as_chunks::<16>();
+    for chunk in chunks {
+        let vec = Simd::from_array(*chunk);
+        let mask = !((vec.simd_eq(Simd::splat(b'_')))
+            | (Simd::splat(b'a').simd_le(vec) & vec.simd_le(Simd::splat(b'z')))
+            | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
+            | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9'))));
+
+        match mask.first_set() {
+            None => len += 16,
+            Some(pos) => return len + pos,
+        }
+    }
     while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = bytes {
         len += 1;
         bytes = rest;
