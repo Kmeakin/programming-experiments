@@ -93,6 +93,15 @@ fn lex_one(input: &[u8]) -> Option<(TokenKind, u32)> {
     Some((kind, len as u32))
 }
 
+fn first_set(mask: Mask<i8, 16>) -> Option<usize> {
+    let iota = Simd::from_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    let min = (!mask.to_simd() | iota).cast::<u8>().reduce_min();
+    if min == u8::MAX {
+        return None;
+    }
+    Some(min as usize)
+}
+
 fn whitespace(mut bytes: &[u8]) -> usize {
     let mut len = 0;
 
@@ -211,7 +220,7 @@ fn ident(bytes: &[u8]) -> usize {
             | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
             | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9'))));
 
-        match mask.first_set() {
+        match first_set(mask) {
             None => len += 16,
             Some(pos) => return len + pos,
         }
@@ -231,7 +240,7 @@ fn decimal(bytes: &[u8]) -> usize {
         let mask = !((Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')))
             | vec.simd_eq(Simd::splat(b'_')));
 
-        match mask.first_set() {
+        match first_set(mask) {
             None => len += 16,
             Some(pos) => return len + pos,
         }
