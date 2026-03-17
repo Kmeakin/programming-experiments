@@ -21,6 +21,13 @@ fn lex_manual(input: &str) -> Vec<(TokenKind, u32)> {
     crate::manual::lex_iter(input).collect()
 }
 
+fn lex_manual_loop(input: &str) -> Vec<(TokenKind, u32)> {
+    debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
+    let mut tokens = Vec::new();
+    crate::manual_loop::lex_loop(input, |kind, len| tokens.push((kind, len)));
+    tokens
+}
+
 fn check_logos(input: &str) {
     let rustc_tokens = lex_rustc(input);
     let logos_tokens = lex_logos(input);
@@ -61,6 +68,26 @@ fn check_manual(input: &str) {
     }
 }
 
+fn check_manual_loop(input: &str) {
+    let rustc_tokens = lex_rustc(input);
+    let manual_tokens = lex_manual_loop(input);
+
+    let mut rustc_pos = 0;
+    let mut manual_pos = 0;
+    for (rustc_token @ (_, rustc_len), manual_token @ (_, manual_len)) in
+        rustc_tokens.iter().zip(&manual_tokens)
+    {
+        let rustc_src = &input[rustc_pos..rustc_pos + *rustc_len as usize];
+        let manual_src = &input[manual_pos..manual_pos + *manual_len as usize];
+        assert_eq!(
+            rustc_token, manual_token,
+            "\nrustc_src: `{rustc_src}`\nmanual_src: `{manual_src}`"
+        );
+        rustc_pos += *rustc_len as usize;
+        manual_pos += *manual_len as usize;
+    }
+}
+
 #[test]
 fn test_logos() {
     let input = std::fs::read_to_string(format!("{CRATE_ROOT}/test-data/rustc.rs")).unwrap();
@@ -71,4 +98,10 @@ fn test_logos() {
 fn test_manual() {
     let input = std::fs::read_to_string(format!("{CRATE_ROOT}/test-data/rustc.rs")).unwrap();
     check_manual(&input);
+}
+
+#[test]
+fn test_manual_loop() {
+    let input = std::fs::read_to_string(format!("{CRATE_ROOT}/test-data/rustc.rs")).unwrap();
+    check_manual_loop(&input);
 }

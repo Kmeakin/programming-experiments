@@ -2,6 +2,7 @@
 
 pub mod logos;
 pub mod manual;
+pub mod manual_loop;
 pub mod rustc;
 
 #[cfg(test)]

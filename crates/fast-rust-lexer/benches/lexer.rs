@@ -77,10 +77,35 @@ fn manual(c: &mut Criterion) {
     group.finish();
 }
 
+fn manual_loop(c: &mut Criterion) {
+    let input = get_input();
+
+    let mut group = c.benchmark_group("manual_loop");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("collect", |b| {
+        b.iter(|| {
+            let mut output = Vec::new();
+            fast_rust_lexer::manual_loop::lex_loop(&input, |kind, len| output.push((kind, len)));
+            black_box(output)
+        });
+    });
+
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("collect_preallocated", |b| {
+        b.iter(|| {
+            let mut output = Vec::with_capacity(input.len());
+            fast_rust_lexer::manual_loop::lex_loop(&input, |kind, len| output.push((kind, len)));
+            black_box(output)
+        });
+    });
+    group.finish();
+}
+
 fn main() {
     let mut criterion: Criterion<_> = Criterion::default().configure_from_args();
     rustc(&mut criterion);
     logos(&mut criterion);
     manual(&mut criterion);
+    manual_loop(&mut criterion);
     Criterion::default().configure_from_args().final_summary();
 }
