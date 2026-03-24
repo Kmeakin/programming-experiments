@@ -28,6 +28,15 @@ fn lex_manual_loop(input: &str) -> Vec<(TokenKind, u32)> {
     tokens
 }
 
+fn lex_jump_threading(input: &str) -> Vec<(TokenKind, u32)> {
+    debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
+    let mut tokens = Vec::new();
+    crate::jump_threading::lex_loop(input.as_bytes(), |kind, len| {
+        tokens.push((kind, len as u32));
+    });
+    tokens
+}
+
 fn check_logos(input: &str) {
     let rustc_tokens = lex_rustc(input);
     let logos_tokens = lex_logos(input);
@@ -88,6 +97,26 @@ fn check_manual_loop(input: &str) {
     }
 }
 
+fn check_jump_threading(input: &str) {
+    let rustc_tokens = lex_rustc(input);
+    let jump_threading_tokens = lex_jump_threading(input);
+
+    let mut rustc_pos = 0;
+    let mut manual_pos = 0;
+    for (rustc_token @ (_, rustc_len), manual_token @ (_, manual_len)) in
+        rustc_tokens.iter().zip(&jump_threading_tokens)
+    {
+        let rustc_src = &input[rustc_pos..rustc_pos + *rustc_len as usize];
+        let manual_src = &input[manual_pos..manual_pos + *manual_len as usize];
+        assert_eq!(
+            rustc_token, manual_token,
+            "\nrustc_src: `{rustc_src}`\nmanual_src: `{manual_src}`"
+        );
+        rustc_pos += *rustc_len as usize;
+        manual_pos += *manual_len as usize;
+    }
+}
+
 #[test]
 fn test_logos() {
     let input = std::fs::read_to_string(format!("{CRATE_ROOT}/test-data/rustc.rs")).unwrap();
@@ -104,4 +133,10 @@ fn test_manual() {
 fn test_manual_loop() {
     let input = std::fs::read_to_string(format!("{CRATE_ROOT}/test-data/rustc.rs")).unwrap();
     check_manual_loop(&input);
+}
+
+#[test]
+fn test_jump_threading() {
+    let input = std::fs::read_to_string(format!("{CRATE_ROOT}/test-data/rustc.rs")).unwrap();
+    check_jump_threading(&input);
 }
