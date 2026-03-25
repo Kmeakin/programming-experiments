@@ -1,5 +1,9 @@
-#![feature(portable_simd)]
-#![feature(explicit_tail_calls)]
+#![feature(
+    explicit_tail_calls,
+    likely_unlikely,
+    portable_simd,
+    rust_preserve_none_cc
+)]
 
 use std::simd::prelude::*;
 
@@ -8,6 +12,8 @@ pub mod logos;
 pub mod manual;
 pub mod manual_loop;
 pub mod rustc;
+
+pub mod stdx;
 
 #[cfg(test)]
 mod tests;

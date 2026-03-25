@@ -1,6 +1,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput};
+use fast_rust_lexer::stdx::push_unchecked;
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -28,6 +29,17 @@ fn rustc(c: &mut Criterion) {
             black_box(output)
         });
     });
+
+    group.bench_function("push_unchecked", |b| {
+        b.iter(|| {
+            let mut output = Vec::with_capacity(input.len());
+            fast_rust_lexer::rustc_lex_iter(&input).for_each(|(kind, len)| unsafe {
+                push_unchecked(&mut output, (kind, len));
+            });
+            black_box(output)
+        });
+    });
+
     group.finish();
 }
 
@@ -36,6 +48,7 @@ fn logos(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("logos");
     group.throughput(Throughput::Bytes(input.len() as u64));
+
     group.bench_function("collect", |b| {
         b.iter(|| {
             let output = fast_rust_lexer::logos::lex_iter(&input).collect::<Vec<_>>();
@@ -43,7 +56,6 @@ fn logos(c: &mut Criterion) {
         });
     });
 
-    group.throughput(Throughput::Bytes(input.len() as u64));
     group.bench_function("collect_preallocated", |b| {
         b.iter(|| {
             let mut output = Vec::with_capacity(input.len());
@@ -51,6 +63,17 @@ fn logos(c: &mut Criterion) {
             black_box(output)
         });
     });
+
+    group.bench_function("push_unchecked", |b| {
+        b.iter(|| {
+            let mut output = Vec::with_capacity(input.len());
+            fast_rust_lexer::logos::lex_iter(&input).for_each(|(kind, len)| unsafe {
+                push_unchecked(&mut output, (kind, len));
+            });
+            black_box(output)
+        });
+    });
+
     group.finish();
 }
 
@@ -74,6 +97,17 @@ fn manual(c: &mut Criterion) {
             black_box(output)
         });
     });
+
+    group.bench_function("push_unchecked", |b| {
+        b.iter(|| {
+            let mut output = Vec::with_capacity(input.len());
+            fast_rust_lexer::manual::lex_iter(&input).for_each(|(kind, len)| unsafe {
+                push_unchecked(&mut output, (kind, len));
+            });
+            black_box(output)
+        });
+    });
+
     group.finish();
 }
 
@@ -95,6 +129,16 @@ fn manual_loop(c: &mut Criterion) {
         b.iter(|| {
             let mut output = Vec::with_capacity(input.len());
             fast_rust_lexer::manual_loop::lex_loop(&input, |kind, len| output.push((kind, len)));
+            black_box(output)
+        });
+    });
+
+    group.bench_function("push_unchecked", |b| {
+        b.iter(|| {
+            let mut output = Vec::with_capacity(input.len());
+            fast_rust_lexer::manual_loop::lex_loop(&input, |kind, len| unsafe {
+                push_unchecked(&mut output, (kind, len));
+            });
             black_box(output)
         });
     });
@@ -122,6 +166,17 @@ fn jump_threading(c: &mut Criterion) {
             let mut output = Vec::with_capacity(input.len());
             fast_rust_lexer::jump_threading::lex_loop(input.as_bytes(), |kind, len| {
                 output.push((kind, len));
+            });
+            black_box(output)
+        });
+    });
+
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("push_unchecked", |b| {
+        b.iter(|| {
+            let mut output = Vec::with_capacity(input.len());
+            fast_rust_lexer::jump_threading::lex_loop(input.as_bytes(), |kind, len| unsafe {
+                push_unchecked(&mut output, (kind, len));
             });
             black_box(output)
         });

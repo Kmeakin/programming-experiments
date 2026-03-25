@@ -1,10 +1,10 @@
 #![allow(clippy::missing_const_for_fn)]
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::{TokenKind, first_set};
+use crate::{TokenKind, first_set, stdx::push_unchecked};
 use std::simd::prelude::*;
 
-type LexFn<F> = fn(&[u8], F);
+type LexFn<F> = extern "rust-preserve-none" fn(&[u8], F);
 
 const fn make_jump_table<F>() -> [LexFn<F>; 256]
 where F: FnMut(TokenKind, usize) {
@@ -69,14 +69,17 @@ macro_rules! ret {
         let output = $output;
         let len = input.len() - output.len() + 1;
         $on_token($kind, len);
-        let Some((byte0, rest)) = output.split_first() else {
+        if std::hint::unlikely(output.is_empty()) {
             return;
-        };
-        become make_jump_table()[*byte0 as usize](rest, $on_token);
+        }
+
+        let byte0 = output[0];
+        let rest = &output[1..];
+        become make_jump_table()[byte0 as usize](rest, $on_token);
     }};
 }
 
-pub fn lex_loop<F>(bytes: &[u8], on_token: F)
+pub extern "rust-preserve-none" fn lex_loop<F>(bytes: &[u8], on_token: F)
 where F: FnMut(TokenKind, usize) {
     let Some((byte0, rest)) = bytes.split_first() else {
         return;
@@ -84,89 +87,110 @@ where F: FnMut(TokenKind, usize) {
     become make_jump_table()[*byte0 as usize](rest, on_token);
 }
 
-fn unknown(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn unknown(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Unknown, input, input, on_token);
 }
-fn open_paren(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn open_paren(
+    input: &[u8],
+    mut on_token: impl FnMut(TokenKind, usize),
+) {
     ret!(TokenKind::OpenParen, input, input, on_token);
 }
-fn close_paren(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn close_paren(
+    input: &[u8],
+    mut on_token: impl FnMut(TokenKind, usize),
+) {
     ret!(TokenKind::CloseParen, input, input, on_token);
 }
-fn open_bracket(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn open_bracket(
+    input: &[u8],
+    mut on_token: impl FnMut(TokenKind, usize),
+) {
     ret!(TokenKind::OpenBracket, input, input, on_token);
 }
-fn close_bracket(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn close_bracket(
+    input: &[u8],
+    mut on_token: impl FnMut(TokenKind, usize),
+) {
     ret!(TokenKind::CloseBracket, input, input, on_token);
 }
-fn open_brace(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn open_brace(
+    input: &[u8],
+    mut on_token: impl FnMut(TokenKind, usize),
+) {
     ret!(TokenKind::OpenBrace, input, input, on_token);
 }
-fn close_brace(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn close_brace(
+    input: &[u8],
+    mut on_token: impl FnMut(TokenKind, usize),
+) {
     ret!(TokenKind::CloseBrace, input, input, on_token);
 }
-fn comma(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn comma(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Comma, input, input, on_token);
 }
-fn semi(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn semi(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Semi, input, input, on_token);
 }
-fn colon(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn colon(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Colon, input, input, on_token);
 }
-fn plus(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn plus(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Plus, input, input, on_token);
 }
-fn minus(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn minus(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Minus, input, input, on_token);
 }
-fn star(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn star(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Star, input, input, on_token);
 }
-fn percent(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn percent(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Percent, input, input, on_token);
 }
-fn eq(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn eq(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Eq, input, input, on_token);
 }
-fn and(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn and(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::And, input, input, on_token);
 }
-fn or(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn or(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Or, input, input, on_token);
 }
-fn dollar(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn dollar(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Dollar, input, input, on_token);
 }
-fn question(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn question(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Question, input, input, on_token);
 }
-fn tilde(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn tilde(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Tilde, input, input, on_token);
 }
-fn hash(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn hash(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Hash, input, input, on_token);
 }
-fn at(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn at(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::At, input, input, on_token);
 }
-fn dot(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn dot(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Dot, input, input, on_token);
 }
-fn bang(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn bang(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Bang, input, input, on_token);
 }
-fn gt(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn gt(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Gt, input, input, on_token);
 }
-fn lt(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn lt(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Lt, input, input, on_token);
 }
-fn caret(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn caret(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Caret, input, input, on_token);
 }
 
-fn whitespace(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn whitespace(
+    input: &[u8],
+    mut on_token: impl FnMut(TokenKind, usize),
+) {
     let mut output = input;
     while let [b' ' | b'\t' | b'\n', rest @ ..] = output {
         output = rest;
@@ -174,14 +198,14 @@ fn whitespace(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     ret!(TokenKind::Whitespace, input, output, on_token);
 }
 
-fn eat_line_comment(input: &[u8]) -> &[u8] {
+extern "rust-preserve-none" fn eat_line_comment(input: &[u8]) -> &[u8] {
     match memchr::memchr(b'\n', input) {
         Some(pos) => unsafe { input.get_unchecked(pos..) },
         None => &input[input.len()..],
     }
 }
 
-fn eat_block_comment(input: &[u8]) -> &[u8] {
+extern "rust-preserve-none" fn eat_block_comment(input: &[u8]) -> &[u8] {
     let mut depth = 1usize;
 
     for pos in memchr::memchr_iter(b'/', input) {
@@ -198,23 +222,28 @@ fn eat_block_comment(input: &[u8]) -> &[u8] {
     &input[input.len()..]
 }
 
-fn slash(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn slash(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     match input {
-        [b'/', rest @ ..] => {
-            let output = eat_line_comment(rest);
-            ret!(TokenKind::LineComment, input, output, on_token);
-        }
-        [b'*', rest @ ..] => {
-            let output = eat_block_comment(rest);
-            ret!(TokenKind::BlockComment, input, output, on_token);
-        }
-        _ => {
-            ret!(TokenKind::Slash, input, input, on_token);
-        }
+        [b'/', rest @ ..] => ret!(
+            TokenKind::LineComment,
+            input,
+            eat_line_comment(rest),
+            on_token
+        ),
+        [b'*', rest @ ..] => ret!(
+            TokenKind::BlockComment,
+            input,
+            eat_block_comment(rest),
+            on_token
+        ),
+        _ => ret!(TokenKind::Slash, input, input, on_token),
     }
 }
 
-fn char_or_lifetime(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn char_or_lifetime(
+    input: &[u8],
+    mut on_token: impl FnMut(TokenKind, usize),
+) {
     let mut output = input;
     if let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', _, ..] = output {
         while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = output {
@@ -222,12 +251,8 @@ fn char_or_lifetime(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
         }
 
         match output {
-            [b'\'', output @ ..] => {
-                ret!(TokenKind::Char, input, output, on_token);
-            }
-            _ => {
-                ret!(TokenKind::Lifetime, input, output, on_token);
-            }
+            [b'\'', output @ ..] => ret!(TokenKind::Char, input, output, on_token),
+            _ => ret!(TokenKind::Lifetime, input, output, on_token),
         }
     }
 
@@ -235,7 +260,6 @@ fn char_or_lifetime(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
         match output {
             [b'\'', output @ ..] => ret!(TokenKind::Char, input, output, on_token),
             [] => ret!(TokenKind::Char, input, output, on_token),
-
             [b'\\', _, rest @ ..] | [_, rest @ ..] => output = rest,
         }
     }
@@ -256,26 +280,29 @@ fn eat_single_quote_string(input: &[u8]) -> &[u8] {
     output
 }
 
-fn double_quote(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn double_quote(
+    input: &[u8],
+    mut on_token: impl FnMut(TokenKind, usize),
+) {
     let output = eat_double_quote_string(input);
     ret!(TokenKind::Str, input, output, on_token);
 }
 
-fn eat_double_quote_string(input: &[u8]) -> &[u8] {
+extern "rust-preserve-none" fn eat_double_quote_string(input: &[u8]) -> &[u8] {
     for pos in memchr::memchr_iter(b'"', input) {
-        let backslashes = input[..pos]
+        let backslashes = unsafe { input.get_unchecked(..pos) }
             .iter()
             .rev()
             .take_while(|&&b| b == b'\\')
             .count();
         if backslashes % 2 == 0 {
-            return &input[pos + 1..];
+            unsafe { return input.get_unchecked(pos + 1..) };
         }
     }
     &input[input.len()..]
 }
 
-fn eat_hash_string(input: &[u8]) -> &[u8] {
+extern "rust-preserve-none" fn eat_hash_string(input: &[u8]) -> &[u8] {
     let mut output = input;
     let mut num_hashes = 1;
 
@@ -289,28 +316,28 @@ fn eat_hash_string(input: &[u8]) -> &[u8] {
     };
 
     for pos in memchr::memchr_iter(b'"', output) {
-        if output[pos + 1..]
+        if unsafe { output.get_unchecked(pos + 1..) }
             .iter()
             .take_while(|&&b| b == b'#')
             .take(num_hashes)
             .count()
             == num_hashes
         {
-            return &output[pos + num_hashes + 1..];
+            return unsafe { output.get_unchecked(pos + num_hashes + 1..) };
         }
     }
 
     &output[output.len()..]
 }
 
-fn eat_raw_string(input: &[u8]) -> &[u8] {
+extern "rust-preserve-none" fn eat_raw_string(input: &[u8]) -> &[u8] {
     match memchr::memchr(b'"', input) {
         Some(pos) => unsafe { input.get_unchecked(pos + 1..) },
         None => &input[input.len()..],
     }
 }
 
-fn b(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn b(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     match input {
         [b'\'', rest @ ..] => ret!(
             TokenKind::Byte,
@@ -337,7 +364,7 @@ fn b(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     }
 }
 
-fn c(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn c(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     match input {
         [b'"', rest @ ..] => {
             let output = eat_double_quote_string(rest);
@@ -360,7 +387,7 @@ fn c(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     }
 }
 
-fn r(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn r(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     match input {
         [
             b'#',
@@ -385,7 +412,7 @@ fn r(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     }
 }
 
-fn eat_ident(input: &[u8]) -> &[u8] {
+extern "rust-preserve-none" fn eat_ident(input: &[u8]) -> &[u8] {
     let mut len = 0;
 
     let (chunks, mut output) = input.as_chunks::<16>();
@@ -407,12 +434,12 @@ fn eat_ident(input: &[u8]) -> &[u8] {
     output
 }
 
-fn ident(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn ident(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     let output = eat_ident(input);
     ret!(TokenKind::Ident, input, output, on_token);
 }
 
-fn eat_decimal(input: &[u8]) -> &[u8] {
+extern "rust-preserve-none" fn eat_decimal(input: &[u8]) -> &[u8] {
     let mut len = 0;
     let (chunks, rest) = input.as_chunks::<16>();
     for chunk in chunks {
@@ -432,7 +459,7 @@ fn eat_decimal(input: &[u8]) -> &[u8] {
     output
 }
 
-fn number(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
+extern "rust-preserve-none" fn number(input: &[u8], mut on_token: impl FnMut(TokenKind, usize)) {
     let mut output = eat_decimal(input);
 
     let mut kind = match output {
