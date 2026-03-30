@@ -1,14 +1,13 @@
 #![feature(explicit_tail_calls, portable_simd, rust_preserve_none_cc)]
 #![allow(incomplete_features)]
 
-use std::simd::prelude::*;
-
 pub mod jump_threading;
 pub mod logos;
 pub mod manual;
 pub mod manual_loop;
 pub mod rustc;
 
+pub mod simdx;
 pub mod stdx;
 
 #[cfg(test)]
@@ -271,13 +270,4 @@ impl From<logos::TokenKind> for TokenKind {
             logos::TokenKind::Unknown => Self::Unknown,
         }
     }
-}
-
-pub fn first_set(mask: Mask<i8, 16>) -> Option<usize> {
-    let iota = Simd::from_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-    let min = (!mask.to_simd() | iota).cast::<u8>().reduce_min();
-    if min == u8::MAX {
-        return None;
-    }
-    Some(min as usize)
 }

@@ -1,6 +1,6 @@
 use std::simd::prelude::*;
 
-use crate::TokenKind;
+use crate::{TokenKind, simdx::first_set};
 
 #[allow(clippy::cast_possible_truncation)]
 #[allow(clippy::while_let_loop)]
@@ -84,15 +84,6 @@ pub fn lex_loop(input: &str, mut on_token: impl FnMut(TokenKind, u32)) {
         bytes0 = unsafe { bytes0.get_unchecked(len..) };
         on_token(kind, len as u32);
     }
-}
-
-fn first_set(mask: Mask<i8, 16>) -> Option<usize> {
-    let iota = Simd::from_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
-    let min = (!mask.to_simd() | iota).cast::<u8>().reduce_min();
-    if min == u8::MAX {
-        return None;
-    }
-    Some(min as usize)
 }
 
 fn whitespace(mut bytes: &[u8]) -> usize {
