@@ -1,9 +1,5 @@
-#![feature(
-    explicit_tail_calls,
-    likely_unlikely,
-    portable_simd,
-    rust_preserve_none_cc
-)]
+#![feature(explicit_tail_calls, portable_simd, rust_preserve_none_cc)]
+#![allow(incomplete_features)]
 
 use std::simd::prelude::*;
 
