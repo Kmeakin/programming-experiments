@@ -36,6 +36,17 @@ macro_rules! single_fn {
     };
 }
 
+#[rustfmt::skip]
+macro_rules! wrap {
+    ($name:ident) => {
+        extern "rust-preserve-none"
+        fn $name(&self, mut on_token: F, input: &[u8]) {
+            let (kind, output) = $name(input);
+            ret!(self, on_token, kind, input, output);
+        }
+    }
+}
+
 impl<F: FnMut(TokenKind, usize)> JumpTable<F> {
     const fn new() -> Self {
         const {
@@ -73,14 +84,14 @@ impl<F: FnMut(TokenKind, usize)> JumpTable<F> {
                     b'^' => Self::caret,
 
                     b' ' | b'\n' | b'\t' => Self::whitespace,
-                    b'/' => Self::slash,
+                    b'/' => Self::slash_or_comment,
 
                     b'\'' => Self::char_or_lifetime,
-                    b'"' => Self::double_quote,
+                    b'"' => Self::string,
 
-                    b'b' => Self::b,
-                    b'c' => Self::c,
-                    b'r' => Self::r,
+                    b'b' => Self::b_string_or_ident,
+                    b'c' => Self::c_string_or_ident,
+                    b'r' => Self::r_string_or_ident,
 
                     b'a'..=b'z' | b'A'..=b'Z' | b'_' => Self::ident,
                     b'0'..=b'9' => Self::number,
@@ -121,187 +132,15 @@ impl<F: FnMut(TokenKind, usize)> JumpTable<F> {
     single_fn!(lt, Lt);
     single_fn!(caret, Caret);
 
-    extern "rust-preserve-none" fn whitespace(&self, mut on_token: F, input: &[u8]) {
-        ret!(
-            self,
-            on_token,
-            TokenKind::Whitespace,
-            input,
-            eat_whitespace(input)
-        )
-    }
-
-    extern "rust-preserve-none" fn slash(&self, mut on_token: F, input: &[u8]) {
-        match input {
-            [b'/', rest @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::LineComment,
-                input,
-                eat_line_comment(rest)
-            ),
-            [b'*', rest @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::BlockComment,
-                input,
-                eat_block_comment(rest)
-            ),
-            _ => ret!(self, on_token, TokenKind::Slash, input, input),
-        }
-    }
-
-    extern "rust-preserve-none" fn char_or_lifetime(&self, mut on_token: F, input: &[u8]) {
-        let mut output = input;
-        if let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', _, ..] = output {
-            while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = output {
-                output = rest;
-            }
-
-            match output {
-                [b'\'', output @ ..] => ret!(self, on_token, TokenKind::Char, input, output),
-                _ => ret!(self, on_token, TokenKind::Lifetime, input, output),
-            }
-        }
-
-        ret!(
-            self,
-            on_token,
-            TokenKind::Char,
-            input,
-            eat_single_quote_string(input)
-        )
-    }
-
-    extern "rust-preserve-none" fn double_quote(&self, mut on_token: F, input: &[u8]) {
-        ret!(
-            self,
-            on_token,
-            TokenKind::Str,
-            input,
-            eat_double_quote_string(input)
-        )
-    }
-
-    extern "rust-preserve-none" fn b(&self, mut on_token: F, input: &[u8]) {
-        match input {
-            [b'\'', rest @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::Byte,
-                input,
-                eat_single_quote_string(rest)
-            ),
-            [b'"', rest @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::ByteStr,
-                input,
-                eat_double_quote_string(rest)
-            ),
-            [b'r', b'#', rest @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::RawByteStr,
-                input,
-                eat_hash_string(rest)
-            ),
-            [b'r', b'"', rest @ ..] => {
-                ret!(
-                    self,
-                    on_token,
-                    TokenKind::RawByteStr,
-                    input,
-                    eat_raw_string(rest)
-                )
-            }
-            _ => ret!(self, on_token, TokenKind::Ident, input, eat_ident(input)),
-        }
-    }
-
-    extern "rust-preserve-none" fn c(&self, mut on_token: F, input: &[u8]) {
-        match input {
-            [b'"', rest @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::CStr,
-                input,
-                eat_double_quote_string(rest)
-            ),
-            [b'r', b'#', rest @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::CStr,
-                input,
-                eat_hash_string(rest)
-            ),
-            [b'r', b'"', bytes @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::CStr,
-                input,
-                eat_raw_string(bytes)
-            ),
-            _ => ret!(self, on_token, TokenKind::Ident, input, eat_ident(input)),
-        }
-    }
-
-    extern "rust-preserve-none" fn r(&self, mut on_token: F, input: &[u8]) {
-        match input {
-            [
-                b'#',
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_',
-                rest @ ..,
-            ] => ret!(self, on_token, TokenKind::RawIdent, input, eat_ident(rest)),
-            [b'#', rest @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::RawStr,
-                input,
-                eat_hash_string(rest)
-            ),
-            [b'"', rest @ ..] => ret!(
-                self,
-                on_token,
-                TokenKind::RawStr,
-                input,
-                eat_raw_string(rest)
-            ),
-            _ => ret!(self, on_token, TokenKind::Ident, input, eat_ident(input)),
-        }
-    }
-
-    extern "rust-preserve-none" fn number(&self, mut on_token: F, input: &[u8]) {
-        let mut output = eat_decimal(input);
-
-        let mut kind = match output {
-            [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => TokenKind::Int,
-            [b'.', rest @ ..] => {
-                output = rest;
-                while let [b'0'..=b'9' | b'_', rest @ ..] = output {
-                    output = rest;
-                }
-
-                TokenKind::Float
-            }
-            _ => TokenKind::Int,
-        };
-
-        if let [b'e' | b'E', rest @ ..] = output {
-            kind = TokenKind::Float;
-            output = rest;
-
-            if let [b'+' | b'-', rest @ ..] = output {
-                output = rest;
-            }
-        }
-
-        ret!(self, on_token, kind, input, eat_ident(output))
-    }
-
-    extern "rust-preserve-none" fn ident(&self, mut on_token: F, input: &[u8]) {
-        ret!(self, on_token, TokenKind::Ident, input, eat_ident(input))
-    }
+    wrap!(whitespace);
+    wrap!(slash_or_comment);
+    wrap!(char_or_lifetime);
+    wrap!(string);
+    wrap!(b_string_or_ident);
+    wrap!(c_string_or_ident);
+    wrap!(r_string_or_ident);
+    wrap!(number);
+    wrap!(ident);
 }
 
 pub fn collect(bytes: &[u8]) -> Vec<(TokenKind, u32)> {
@@ -329,41 +168,72 @@ pub fn lex_loop<F: FnMut(TokenKind, usize)>(bytes: &[u8], on_token: F) {
     jump_table.fns[*byte0 as usize](&jump_table, on_token, rest);
 }
 
-fn eat_whitespace(input: &[u8]) -> &[u8] {
+#[inline]
+fn whitespace(input: &[u8]) -> (TokenKind, &[u8]) {
     let mut output = input;
     while let [b' ' | b'\t' | b'\n', rest @ ..] = output {
         output = rest;
     }
-    output
+    (TokenKind::Whitespace, output)
 }
 
 #[inline]
-extern "rust-preserve-none" fn eat_line_comment(input: &[u8]) -> &[u8] {
-    match memchr::memchr(b'\n', input) {
-        Some(pos) => unsafe { input.get_unchecked(pos..) },
-        None => &input[input.len()..],
-    }
-}
-
-#[inline]
-extern "rust-preserve-none" fn eat_block_comment(input: &[u8]) -> &[u8] {
-    let mut depth = 1usize;
-
-    for pos in memchr::memchr_iter(b'/', input) {
-        if pos > 0 && input.get(pos - 1) == Some(&b'*') {
-            depth -= 1;
-            if depth == 0 {
-                unsafe { return input.get_unchecked(pos + 1..) };
-            }
-        } else if input.get(pos + 1) == Some(&b'*') {
-            depth += 1;
+fn slash_or_comment(input: &[u8]) -> (TokenKind, &[u8]) {
+    #[inline]
+    fn eat_line_comment(input: &[u8]) -> &[u8] {
+        match memchr::memchr(b'\n', input) {
+            Some(pos) => unsafe { input.get_unchecked(pos..) },
+            None => &input[input.len()..],
         }
     }
 
-    &input[input.len()..]
+    #[inline]
+    fn eat_block_comment(input: &[u8]) -> &[u8] {
+        let mut depth = 1usize;
+
+        for pos in memchr::memchr_iter(b'/', input) {
+            if pos > 0 && input.get(pos - 1) == Some(&b'*') {
+                depth -= 1;
+                if depth == 0 {
+                    unsafe { return input.get_unchecked(pos + 1..) };
+                }
+            } else if input.get(pos + 1) == Some(&b'*') {
+                depth += 1;
+            }
+        }
+
+        &input[input.len()..]
+    }
+
+    match input {
+        [b'/', rest @ ..] => (TokenKind::LineComment, eat_line_comment(rest)),
+        [b'*', rest @ ..] => (TokenKind::BlockComment, eat_block_comment(rest)),
+        _ => (TokenKind::Slash, input),
+    }
 }
 
-extern "rust-preserve-none" fn eat_single_quote_string(input: &[u8]) -> &[u8] {
+#[inline]
+fn char_or_lifetime(input: &[u8]) -> (TokenKind, &[u8]) {
+    let mut output = input;
+    if let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', _, ..] = output {
+        while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = output {
+            output = rest;
+        }
+
+        match output {
+            [b'\'', output @ ..] => return (TokenKind::Char, output),
+            _ => return (TokenKind::Lifetime, output),
+        };
+    }
+
+    (TokenKind::Char, eat_single_quote_string(input))
+}
+
+#[inline]
+fn string(input: &[u8]) -> (TokenKind, &[u8]) { (TokenKind::Str, eat_double_quote_string(input)) }
+
+#[inline]
+fn eat_single_quote_string(input: &[u8]) -> &[u8] {
     let mut output = input;
     loop {
         match output {
@@ -393,7 +263,43 @@ fn eat_double_quote_string(input: &[u8]) -> &[u8] {
     &input[input.len()..]
 }
 
-extern "rust-preserve-none" fn eat_hash_string(input: &[u8]) -> &[u8] {
+#[inline]
+fn b_string_or_ident(input: &[u8]) -> (TokenKind, &[u8]) {
+    match input {
+        [b'\'', rest @ ..] => (TokenKind::Byte, eat_single_quote_string(rest)),
+        [b'"', rest @ ..] => (TokenKind::ByteStr, eat_double_quote_string(rest)),
+        [b'r', b'#', rest @ ..] => (TokenKind::RawByteStr, eat_hash_string(rest)),
+        [b'r', b'"', rest @ ..] => (TokenKind::RawByteStr, eat_raw_string(rest)),
+        _ => (TokenKind::Ident, eat_ident(input)),
+    }
+}
+
+#[inline]
+fn c_string_or_ident(input: &[u8]) -> (TokenKind, &[u8]) {
+    match input {
+        [b'"', rest @ ..] => (TokenKind::CStr, eat_double_quote_string(rest)),
+        [b'r', b'#', rest @ ..] => (TokenKind::RawCStr, eat_hash_string(rest)),
+        [b'r', b'"', rest @ ..] => (TokenKind::RawCStr, eat_raw_string(rest)),
+        _ => (TokenKind::Ident, eat_ident(input)),
+    }
+}
+
+#[inline]
+fn r_string_or_ident(input: &[u8]) -> (TokenKind, &[u8]) {
+    match input {
+        [
+            b'#',
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_',
+            rest @ ..,
+        ] => (TokenKind::RawIdent, eat_ident(rest)),
+        [b'#', rest @ ..] => (TokenKind::RawStr, eat_hash_string(rest)),
+        [b'"', rest @ ..] => (TokenKind::RawStr, eat_raw_string(rest)),
+        _ => (TokenKind::Ident, eat_ident(input)),
+    }
+}
+
+#[inline(always)]
+fn eat_hash_string(input: &[u8]) -> &[u8] {
     let mut output = input;
     let mut num_hashes = 1;
 
@@ -421,14 +327,16 @@ extern "rust-preserve-none" fn eat_hash_string(input: &[u8]) -> &[u8] {
     &output[output.len()..]
 }
 
-extern "rust-preserve-none" fn eat_raw_string(input: &[u8]) -> &[u8] {
+#[inline]
+fn eat_raw_string(input: &[u8]) -> &[u8] {
     match memchr::memchr(b'"', input) {
         Some(pos) => unsafe { input.get_unchecked(pos + 1..) },
         None => &input[input.len()..],
     }
 }
 
-extern "rust-preserve-none" fn eat_ident(input: &[u8]) -> &[u8] {
+#[inline]
+fn eat_ident(input: &[u8]) -> &[u8] {
     let mut len = 0;
 
     let (chunks, mut output) = input.as_chunks::<16>();
@@ -450,7 +358,40 @@ extern "rust-preserve-none" fn eat_ident(input: &[u8]) -> &[u8] {
     output
 }
 
-extern "rust-preserve-none" fn eat_decimal(input: &[u8]) -> &[u8] {
+#[inline]
+fn ident(input: &[u8]) -> (TokenKind, &[u8]) { (TokenKind::Ident, eat_ident(input)) }
+
+#[inline]
+fn number(input: &[u8]) -> (TokenKind, &[u8]) {
+    let mut output = eat_decimal(input);
+
+    let mut kind = match output {
+        [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => TokenKind::Int,
+        [b'.', rest @ ..] => {
+            output = rest;
+            while let [b'0'..=b'9' | b'_', rest @ ..] = output {
+                output = rest;
+            }
+
+            TokenKind::Float
+        }
+        _ => TokenKind::Int,
+    };
+
+    if let [b'e' | b'E', rest @ ..] = output {
+        kind = TokenKind::Float;
+        output = rest;
+
+        if let [b'+' | b'-', rest @ ..] = output {
+            output = rest;
+        }
+    }
+
+    (kind, eat_ident(output))
+}
+
+#[inline]
+fn eat_decimal(input: &[u8]) -> &[u8] {
     let mut len = 0;
     let (chunks, rest) = input.as_chunks::<16>();
     for chunk in chunks {
