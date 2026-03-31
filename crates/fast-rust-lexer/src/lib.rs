@@ -1,10 +1,17 @@
-#![feature(explicit_tail_calls, portable_simd, rust_preserve_none_cc)]
+#![feature(
+    explicit_tail_calls,
+    portable_simd,
+    rust_preserve_none_cc,
+    slice_from_ptr_range,
+    bstr
+)]
 #![allow(incomplete_features)]
 
 pub mod jump_threading;
 pub mod logos;
 pub mod manual;
 pub mod manual_loop;
+pub mod raw_ptr;
 pub mod rustc;
 
 pub mod simdx;
