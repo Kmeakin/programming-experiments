@@ -1,4 +1,5 @@
 #![feature(
+    bstr,
     explicit_tail_calls,
     portable_simd,
     rust_preserve_none_cc,
@@ -15,6 +16,7 @@ pub mod rustc;
 
 pub mod simdx;
 pub mod stdx;
+pub mod tbl;
 
 #[cfg(test)]
 mod tests;
