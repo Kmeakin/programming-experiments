@@ -273,8 +273,8 @@ fn char_or_lifetime(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8
     (TokenKind::Char, eat_single_quote_string(cur, src_end))
 }
 #[inline]
-fn string(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
-    (TokenKind::Str, eat_double_quote_string(cur, src_end))
+fn string(cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+    (TokenKind::Str, eat_double_quote_string(cur))
 }
 #[inline]
 fn b_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
@@ -282,10 +282,10 @@ fn b_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, 
         let cur = token_start.add(1);
         match cur.read() {
             b'\'' => return (TokenKind::Byte, eat_single_quote_string(cur, src_end)),
-            b'\"' => return (TokenKind::ByteStr, eat_double_quote_string(cur, src_end)),
+            b'\"' => return (TokenKind::ByteStr, eat_double_quote_string(cur)),
             b'r' => match cur.add(1).read() {
-                b'\"' => return (TokenKind::RawByteStr, eat_raw_string(cur.add(1), src_end)),
-                b'#' => return (TokenKind::RawByteStr, eat_hash_string(cur.add(2), src_end)),
+                b'\"' => return (TokenKind::RawByteStr, eat_raw_string(cur.add(1))),
+                b'#' => return (TokenKind::RawByteStr, eat_hash_string(cur.add(2))),
                 _ => {}
             },
             _ => {}
@@ -294,14 +294,14 @@ fn b_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, 
     }
 }
 #[inline]
-fn c_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+fn c_string_or_ident(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
     unsafe {
         let cur = token_start.add(1);
         match cur.read() {
-            b'\"' => return (TokenKind::CStr, eat_double_quote_string(cur, src_end)),
+            b'\"' => return (TokenKind::CStr, eat_double_quote_string(cur)),
             b'r' => match cur.add(1).read() {
-                b'\"' => return (TokenKind::RawCStr, eat_raw_string(cur.add(1), src_end)),
-                b'#' => return (TokenKind::RawCStr, eat_hash_string(cur.add(2), src_end)),
+                b'\"' => return (TokenKind::RawCStr, eat_raw_string(cur.add(1))),
+                b'#' => return (TokenKind::RawCStr, eat_hash_string(cur.add(2))),
                 _ => {}
             },
             _ => {}
@@ -310,16 +310,16 @@ fn c_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, 
     }
 }
 #[inline]
-fn r_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+fn r_string_or_ident(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
     unsafe {
         let cur = token_start.add(1);
         match cur.read() {
-            b'\"' => return (TokenKind::RawStr, eat_raw_string(cur, src_end)),
+            b'\"' => return (TokenKind::RawStr, eat_raw_string(cur)),
             b'#' => match cur.add(1).read() {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                     return (TokenKind::RawIdent, eat_ident(cur.add(2)));
                 }
-                _ => return (TokenKind::RawStr, eat_hash_string(cur.add(1), src_end)),
+                _ => return (TokenKind::RawStr, eat_hash_string(cur.add(1))),
             },
             _ => {}
         }
@@ -344,37 +344,89 @@ fn eat_single_quote_string(token_start: *const u8, _src_end: *const u8) -> *cons
     }
 }
 #[inline]
-fn eat_double_quote_string(cur: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_double_quote_string(mut cur: *const u8) -> *const u8 {
     unsafe {
-        let cur = cur.add(1);
-        let haystack = std::slice::from_ptr_range(cur..src_end);
-
-        for pos in memchr::memchr_iter(b'"', haystack) {
-            let backslashes = haystack
-                .get_unchecked(..pos)
-                .iter()
-                .rev()
-                .take_while(|&&b| b == b'\\')
-                .count();
-            if backslashes % 2 == 0 {
-                return haystack.as_ptr().add(pos).add(1);
+        cur = cur.add(1);
+        loop {
+            let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let quote_mask = vec.simd_eq(Simd::splat(b'"'));
+            let eof_mask = vec.simd_eq(Simd::splat(EOF_BYTE));
+            if let Some(off) = first_set(quote_mask) {
+                cur = cur.add(off).add(1);
+                let mut backslashes = 0;
+                let mut cur_back = cur.sub(2);
+                while cur_back.read() == b'\\' {
+                    backslashes += 1;
+                    cur_back = cur_back.sub(1);
+                }
+                if backslashes % 2 == 0 {
+                    return cur;
+                }
+                continue;
             }
+            if let Some(off) = first_set(eof_mask) {
+                return cur.add(off);
+            }
+            cur = cur.add(VEC_LEN);
         }
-        src_end.sub(EOF_PADDING)
     }
 }
 #[inline]
-fn eat_raw_string(cur: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_raw_string(mut cur: *const u8) -> *const u8 {
     unsafe {
-        let cur = cur.add(1);
-        let haystack = std::slice::from_ptr_range(cur..src_end);
-        match memchr::memchr(b'"', haystack) {
-            None => src_end.sub(EOF_PADDING),
-            Some(off) => cur.add(off).add(1),
+        cur = cur.add(1);
+        loop {
+            let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let quote_mask = vec.simd_eq(Simd::splat(b'"'));
+            let eof_mask = vec.simd_eq(Simd::splat(EOF_BYTE));
+            if let Some(off) = first_set(quote_mask) {
+                return cur.add(off).add(1);
+            }
+            if let Some(off) = first_set(eof_mask) {
+                return cur.add(off);
+            }
+            cur = cur.add(VEC_LEN);
+        }
+    }
+}
+fn eat_hash_string(mut cur: *const u8) -> *const u8 {
+    unsafe {
+        let mut num_hashes = 1;
+        while cur.read() == b'#' {
+            num_hashes += 1;
+            cur = cur.add(1);
+        }
+
+        let b'"' = cur.read() else {
+            return cur;
+        };
+        cur = cur.add(1);
+
+        loop {
+            let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let quote_mask = vec.simd_eq(Simd::splat(b'"'));
+            let eof_mask = vec.simd_eq(Simd::splat(EOF_BYTE));
+            if let Some(off) = first_set(quote_mask) {
+                cur = cur.add(off).add(1);
+                let mut num_hashes = num_hashes;
+                while cur.read() == b'#' {
+                    cur = cur.add(1);
+                    num_hashes -= 1;
+                    if num_hashes == 0 {
+                        return cur;
+                    }
+                }
+                continue;
+            }
+            if let Some(off) = first_set(eof_mask) {
+                return cur.add(off);
+            }
+            cur = cur.add(VEC_LEN);
         }
     }
 }
 #[inline]
+#[cfg(false)]
 fn eat_hash_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     let mut num_hashes = 1;
 
