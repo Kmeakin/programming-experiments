@@ -290,7 +290,7 @@ fn b_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, 
             },
             _ => {}
         }
-        (TokenKind::Ident, eat_ident(token_start, src_end))
+        (TokenKind::Ident, eat_ident(token_start))
     }
 }
 #[inline]
@@ -306,7 +306,7 @@ fn c_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, 
             },
             _ => {}
         }
-        (TokenKind::Ident, eat_ident(token_start, src_end))
+        (TokenKind::Ident, eat_ident(token_start))
     }
 }
 #[inline]
@@ -317,13 +317,13 @@ fn r_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, 
             b'\"' => return (TokenKind::RawStr, eat_raw_string(cur, src_end)),
             b'#' => match cur.add(1).read() {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                    return (TokenKind::RawIdent, eat_ident(cur.add(2), src_end));
+                    return (TokenKind::RawIdent, eat_ident(cur.add(2)));
                 }
                 _ => return (TokenKind::RawStr, eat_hash_string(cur.add(1), src_end)),
             },
             _ => {}
         }
-        (TokenKind::Ident, eat_ident(token_start, src_end))
+        (TokenKind::Ident, eat_ident(token_start))
     }
 }
 #[inline]
@@ -408,10 +408,29 @@ fn eat_hash_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
 }
 
 #[inline]
-fn ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
-    (TokenKind::Ident, eat_ident(token_start, src_end))
+fn ident(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+    (TokenKind::Ident, eat_ident(token_start))
 }
 #[inline]
+fn eat_ident(mut cur: *const u8) -> *const u8 {
+    unsafe {
+        loop {
+            let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let mask = (vec.simd_eq(Simd::splat(b'_')))
+                | (Simd::splat(b'a').simd_le(vec) & vec.simd_le(Simd::splat(b'z')))
+                | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
+                | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')));
+
+            if let Some(off) = first_set(!mask) {
+                return cur.add(off);
+            }
+
+            cur = cur.add(VEC_LEN);
+        }
+    }
+}
+#[inline]
+#[cfg(false)]
 fn eat_ident(cur: *const u8, src_end: *const u8) -> *const u8 {
     let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
     let (chunks, rest) = haystack.as_chunks::<VEC_LEN>();
@@ -479,7 +498,7 @@ fn number(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
             }
         }
 
-        (kind, eat_ident(cur, src_end))
+        (kind, eat_ident(cur))
     }
 }
 
