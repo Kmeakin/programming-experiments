@@ -4,7 +4,8 @@ use std::{ops::Range, simd::prelude::*};
 type LexFn<F> = extern "rust-preserve-none" fn(&JumpTable<F>, F, *const u8, *const u8);
 
 pub const EOF_BYTE: u8 = 0xff;
-pub const EOF_PADDING: usize = 16;
+pub const VEC_LEN: usize = 16;
+pub const EOF_PADDING: usize = VEC_LEN;
 
 pub fn lex_loop<F: FnMut(TokenKind, *const u8, *const u8)>(src: &[u8], on_token: F) {
     debug_assert!(src.ends_with(&[EOF_BYTE; EOF_PADDING]));
@@ -207,10 +208,7 @@ fn slash_or_comment(mut cur: *const u8, src_end: *const u8) -> (TokenKind, *cons
     let byte1 = unsafe { cur.read() };
     unsafe {
         match byte1 {
-            b'/' => (
-                TokenKind::LineComment,
-                eat_line_comment(cur.add(1), src_end),
-            ),
+            b'/' => (TokenKind::LineComment, eat_line_comment(cur.add(1))),
             b'*' => (
                 TokenKind::BlockComment,
                 eat_block_comment(cur.add(1), src_end),
@@ -220,11 +218,16 @@ fn slash_or_comment(mut cur: *const u8, src_end: *const u8) -> (TokenKind, *cons
     }
 }
 #[inline]
-fn eat_line_comment(cur: *const u8, src_end: *const u8) -> *const u8 {
-    let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
-    match memchr::memchr(b'\n', haystack) {
-        None => unsafe { src_end.sub(EOF_PADDING) },
-        Some(off) => unsafe { cur.add(off) },
+fn eat_line_comment(mut cur: *const u8) -> *const u8 {
+    unsafe {
+        loop {
+            let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let mask = vec.simd_eq(Simd::splat(b'\n')) | vec.simd_eq(Simd::splat(EOF_BYTE));
+            if let Some(off) = first_set(mask) {
+                return cur.add(off);
+            }
+            cur = cur.add(VEC_LEN);
+        }
     }
 }
 #[inline]
@@ -411,7 +414,7 @@ fn ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
 #[inline]
 fn eat_ident(cur: *const u8, src_end: *const u8) -> *const u8 {
     let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
-    let (chunks, rest) = haystack.as_chunks::<16>();
+    let (chunks, rest) = haystack.as_chunks::<VEC_LEN>();
     for chunk in chunks {
         let vec = Simd::from_array(*chunk);
         let mask = (vec.simd_eq(Simd::splat(b'_')))
@@ -432,7 +435,7 @@ fn eat_ident(cur: *const u8, src_end: *const u8) -> *const u8 {
 #[inline]
 fn eat_decimal(cur: *const u8, src_end: *const u8) -> *const u8 {
     let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
-    let (chunks, rest) = haystack.as_chunks::<16>();
+    let (chunks, rest) = haystack.as_chunks::<VEC_LEN>();
     for chunk in chunks {
         let vec = Simd::from_array(*chunk);
         let mask = (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')))
