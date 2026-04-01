@@ -208,7 +208,7 @@ fn slash_or_comment(mut cur: *const u8, src_end: *const u8) -> (TokenKind, *cons
     let byte1 = unsafe { cur.read() };
     unsafe {
         match byte1 {
-            b'/' => (TokenKind::LineComment, eat_line_comment(cur.add(1))),
+            b'/' => (TokenKind::LineComment, eat_line_comment(cur.add(1), src_end)),
             b'*' => (
                 TokenKind::BlockComment,
                 eat_block_comment(cur.add(1), src_end),
@@ -218,15 +218,19 @@ fn slash_or_comment(mut cur: *const u8, src_end: *const u8) -> (TokenKind, *cons
     }
 }
 #[inline]
-fn eat_line_comment(mut cur: *const u8) -> *const u8 {
+fn eat_line_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
+        let src_end = src_end.sub(EOF_PADDING);
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
-            let mask = vec.simd_eq(Simd::splat(b'\n')) | vec.simd_eq(Simd::splat(EOF_BYTE));
+            let mask = vec.simd_eq(Simd::splat(b'\n'));
             if let Some(off) = first_set(mask) {
                 return cur.add(off);
             }
             cur = cur.add(VEC_LEN);
+            if cur >= src_end {
+                return src_end;
+            }
         }
     }
 }
