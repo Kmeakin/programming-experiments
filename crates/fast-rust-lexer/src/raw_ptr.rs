@@ -426,40 +426,6 @@ fn eat_hash_string(mut cur: *const u8) -> *const u8 {
     }
 }
 #[inline]
-#[cfg(false)]
-fn eat_hash_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
-    let mut num_hashes = 1;
-
-    unsafe {
-        while cur.read() == b'#' {
-            num_hashes += 1;
-            cur = cur.add(1);
-        }
-
-        let b'"' = cur.read() else {
-            return cur;
-        };
-        cur = cur.add(1);
-
-        let haystack = std::slice::from_ptr_range(cur..src_end);
-        for pos in memchr::memchr_iter(b'"', haystack) {
-            if haystack
-                .get_unchecked(pos + 1..)
-                .iter()
-                .take_while(|&&b| b == b'#')
-                .take(num_hashes)
-                .count()
-                == num_hashes
-            {
-                return cur.add(pos + num_hashes + 1);
-            }
-        }
-
-        src_end.sub(EOF_PADDING)
-    }
-}
-
-#[inline]
 fn ident(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
     (TokenKind::Ident, eat_ident(token_start))
 }
@@ -482,49 +448,24 @@ fn eat_ident(mut cur: *const u8) -> *const u8 {
     }
 }
 #[inline]
-#[cfg(false)]
-fn eat_ident(cur: *const u8, src_end: *const u8) -> *const u8 {
-    let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
-    let (chunks, rest) = haystack.as_chunks::<VEC_LEN>();
-    for chunk in chunks {
-        let vec = Simd::from_array(*chunk);
-        let mask = (vec.simd_eq(Simd::splat(b'_')))
-            | (Simd::splat(b'a').simd_le(vec) & vec.simd_le(Simd::splat(b'z')))
-            | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
-            | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')));
+fn eat_decimal(mut cur: *const u8) -> *const u8 {
+    unsafe {
+        loop {
+            let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let mask = (vec.simd_eq(Simd::splat(b'_')))
+                | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')));
 
-        if let Some(off) = first_set(!mask) {
-            return unsafe { chunk.as_ptr().add(off) };
+            if let Some(off) = first_set(!mask) {
+                return cur.add(off);
+            }
+
+            cur = cur.add(VEC_LEN);
         }
     }
-    let mut output = rest;
-    while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = output {
-        output = rest;
-    }
-    output.as_ptr()
 }
 #[inline]
-fn eat_decimal(cur: *const u8, src_end: *const u8) -> *const u8 {
-    let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
-    let (chunks, rest) = haystack.as_chunks::<VEC_LEN>();
-    for chunk in chunks {
-        let vec = Simd::from_array(*chunk);
-        let mask = (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')))
-            | vec.simd_eq(Simd::splat(b'_'));
-
-        if let Some(off) = first_set(!mask) {
-            return unsafe { chunk.as_ptr().add(off) };
-        }
-    }
-    let mut output = rest;
-    while let [b'0'..=b'9' | b'_', rest @ ..] = output {
-        output = rest;
-    }
-    output.as_ptr()
-}
-#[inline]
-fn number(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
-    let mut cur = eat_decimal(cur, src_end);
+fn number(cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+    let mut cur = eat_decimal(cur);
 
     unsafe {
         let mut kind = match cur.read() {
