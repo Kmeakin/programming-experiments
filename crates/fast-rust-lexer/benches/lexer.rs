@@ -18,7 +18,7 @@ fn rustc(c: &mut Criterion) {
     group.bench_function("count", |b| {
         b.iter(|| {
             let mut count = 0;
-            fast_rust_lexer::rustc_lex_iter(&input).for_each(|_| {
+            fast_rust_lexer::rustc::lex_iter(&input).for_each(|_| {
                 count += 1;
             });
             black_box(count)
@@ -27,7 +27,7 @@ fn rustc(c: &mut Criterion) {
 
     group.bench_function("collect", |b| {
         b.iter(|| {
-            let output = fast_rust_lexer::rustc_lex_iter(&input).collect::<Vec<_>>();
+            let output = fast_rust_lexer::rustc::lex_iter(&input).collect::<Vec<_>>();
             black_box(output)
         });
     });
@@ -36,7 +36,7 @@ fn rustc(c: &mut Criterion) {
     group.bench_function("collect_preallocated", |b| {
         b.iter(|| {
             let mut output = Vec::with_capacity(input.len());
-            output.extend(fast_rust_lexer::rustc_lex_iter(&input));
+            output.extend(fast_rust_lexer::rustc::lex_iter(&input));
             black_box(output)
         });
     });
@@ -44,7 +44,7 @@ fn rustc(c: &mut Criterion) {
     group.bench_function("push_unchecked", |b| {
         b.iter(|| {
             let mut output = Vec::with_capacity(input.len());
-            fast_rust_lexer::rustc_lex_iter(&input).for_each(|(kind, len)| unsafe {
+            fast_rust_lexer::rustc::lex_iter(&input).for_each(|(kind, len)| unsafe {
                 push_unchecked(&mut output, (kind, len));
             });
             black_box(output)
