@@ -1329,3 +1329,67 @@ impl<'a> Cursor<'a> {
         self.eat_while(is_id_continue);
     }
 }
+
+impl From<TokenKind> for crate::TokenKind {
+    fn from(value: TokenKind) -> Self {
+        match value {
+            TokenKind::LineComment { .. } => Self::LineComment,
+            TokenKind::BlockComment { .. } => Self::BlockComment,
+            TokenKind::Whitespace => Self::Whitespace,
+            TokenKind::Ident => Self::Ident,
+            TokenKind::RawIdent => Self::RawIdent,
+            TokenKind::Literal { kind, .. } => match kind {
+                LiteralKind::Int { .. } => Self::Int,
+                LiteralKind::Float { .. } => Self::Float,
+                LiteralKind::Char { .. } => Self::Char,
+                LiteralKind::Byte { .. } => Self::Byte,
+                LiteralKind::Str { .. } => Self::Str,
+                LiteralKind::ByteStr { .. } => Self::ByteStr,
+                LiteralKind::RawStr { .. } => Self::RawStr,
+                LiteralKind::RawByteStr { .. } => Self::RawByteStr,
+                LiteralKind::CStr { .. } => Self::CStr,
+                LiteralKind::RawCStr { .. } => Self::RawCStr,
+            },
+            TokenKind::Lifetime { .. } => Self::Lifetime,
+            TokenKind::Semi => Self::Semi,
+            TokenKind::Comma => Self::Comma,
+            TokenKind::Dot => Self::Dot,
+            TokenKind::OpenParen => Self::OpenParen,
+            TokenKind::CloseParen => Self::CloseParen,
+            TokenKind::OpenBrace => Self::OpenBrace,
+            TokenKind::CloseBrace => Self::CloseBrace,
+            TokenKind::OpenBracket => Self::OpenBracket,
+            TokenKind::CloseBracket => Self::CloseBracket,
+            TokenKind::At => Self::At,
+            TokenKind::Pound => Self::Hash,
+            TokenKind::Tilde => Self::Tilde,
+            TokenKind::Question => Self::Question,
+            TokenKind::Colon => Self::Colon,
+            TokenKind::Dollar => Self::Dollar,
+            TokenKind::Eq => Self::Eq,
+            TokenKind::Bang => Self::Bang,
+            TokenKind::Lt => Self::Lt,
+            TokenKind::Gt => Self::Gt,
+            TokenKind::Minus => Self::Minus,
+            TokenKind::And => Self::And,
+            TokenKind::Or => Self::Or,
+            TokenKind::Plus => Self::Plus,
+            TokenKind::Star => Self::Star,
+            TokenKind::Slash => Self::Slash,
+            TokenKind::Caret => Self::Caret,
+            TokenKind::Percent => Self::Percent,
+            TokenKind::Unknown => Self::Unknown,
+            TokenKind::Frontmatter { .. } => Self::Frontmatter,
+            TokenKind::InvalidIdent => todo!(),
+            TokenKind::UnknownPrefix => todo!(),
+            TokenKind::UnknownPrefixLifetime => todo!(),
+            TokenKind::RawLifetime => todo!(),
+            TokenKind::GuardedStrPrefix => todo!(),
+            TokenKind::Eof => todo!(),
+        }
+    }
+}
+
+pub fn lex_iter(input: &str) -> impl Iterator<Item = (TokenKind, u32)> {
+    tokenize(input, FrontmatterAllowed::No).map(|token| (TokenKind::from(token.kind), token.len))
+}

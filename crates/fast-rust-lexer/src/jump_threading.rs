@@ -298,7 +298,7 @@ fn r_string_or_ident(input: &[u8]) -> (TokenKind, &[u8]) {
     }
 }
 
-#[inline(always)]
+#[inline]
 fn eat_hash_string(input: &[u8]) -> &[u8] {
     let mut output = input;
     let mut num_hashes = 1;
@@ -682,7 +682,7 @@ mod tests {
                 (Whitespace, 19..24, "\n    ")
                 (RawByteStr, 24..39, "br\"raw string\\\"")
                 (Whitespace, 39..44, "\n    ")
-                (CStr, 44..59, "cr\"raw string\\\"")
+                (RawCStr, 44..59, "cr\"raw string\\\"")
                 (Whitespace, 59..64, "\n    ")
                 (RawStr, 64..83, "r\"unterminated\n    ")"#]],
         );
@@ -752,17 +752,17 @@ mod tests {
     "###,
             &expect![[r###"
                 (Whitespace, 0..5, "\n    ")
-                (CStr, 5..11, "cr#\"\"#")
+                (RawCStr, 5..11, "cr#\"\"#")
                 (Whitespace, 11..16, "\n    ")
-                (CStr, 16..24, "cr##\"\"##")
+                (RawCStr, 16..24, "cr##\"\"##")
                 (Whitespace, 24..29, "\n    ")
-                (CStr, 29..52, "cr#\"raw string\"\"\"\"\"\"\"\"#")
+                (RawCStr, 29..52, "cr#\"raw string\"\"\"\"\"\"\"\"#")
                 (Whitespace, 52..57, "\n    ")
-                (CStr, 57..70, "cr#\"\"\"\"\"\"\"\"\"#")
+                (RawCStr, 57..70, "cr#\"\"\"\"\"\"\"\"\"#")
                 (Whitespace, 70..75, "\n    ")
-                (CStr, 75..89, "cr##\" ##\"\" \"##")
+                (RawCStr, 75..89, "cr##\" ##\"\" \"##")
                 (Whitespace, 89..94, "\n    ")
-                (CStr, 94..116, "cr#\"unterminated\"\n    ")"###]],
+                (RawCStr, 94..116, "cr#\"unterminated\"\n    ")"###]],
         );
     }
 }

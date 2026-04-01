@@ -4,48 +4,44 @@ use std::{ops::Range, simd::prelude::*};
 type LexFn<F> = extern "rust-preserve-none" fn(&JumpTable<F>, F, *const u8, *const u8);
 
 pub const EOF_BYTE: u8 = 0xff;
-pub const EOF_PADDING: usize = 1;
+pub const EOF_PADDING: usize = 16;
 
 pub fn lex_loop<F: FnMut(TokenKind, *const u8, *const u8)>(src: &[u8], on_token: F) {
     debug_assert!(src.ends_with(&[EOF_BYTE; EOF_PADDING]));
-    let table = const { JumpTable::new() };
+    let table = const { &JumpTable::new() };
     let Range {
         start: src_start,
         end: src_end,
     } = src.as_ptr_range();
     let byte0 = unsafe { src_start.read() };
-    table.fns[byte0 as usize](&table, on_token, src_start, src_end);
+    table.fns[byte0 as usize](table, on_token, src_start, src_end);
+}
+
+pub fn hash_lengths(src: &str) -> usize {
+    let mut hash = 0usize;
+    lex_loop(src.as_bytes(), |kind, start, end| {
+        let len = unsafe { end.offset_from_unsigned(start) };
+        hash ^= len;
+        hash ^= kind as usize;
+    });
+    hash
 }
 
 struct JumpTable<F> {
     fns: [LexFn<F>; 256],
 }
 
-macro_rules! token {
-    (| $token_start:pat_param, $src_end:pat_param | $body:expr) => {{
-        #[inline(always)]
-        fn inner($token_start: *const u8, $src_end: *const u8) -> (TokenKind, *const u8) { $body }
-
-        extern "rust-preserve-none" fn wrapper<F: FnMut(TokenKind, *const u8, *const u8)>(
-            table: &JumpTable<F>,
-            mut on_token: F,
-            token_start: *const u8,
-            src_end: *const u8,
-        ) {
-            let (kind, token_end) = inner(token_start, src_end);
+#[rustfmt::skip]
+macro_rules! def_wrapper {
+    ($name:ident) => {
+        extern "rust-preserve-none"
+        fn $name(&self, mut on_token: F, token_start: *const u8, src_end: *const u8) {
+            let (kind, token_end) = $name(token_start, src_end);
             on_token(kind, token_start, token_end);
-
             let next_token_start = token_end;
             let byte0 = unsafe { next_token_start.read() };
-            become table.fns[byte0 as usize](table, on_token, next_token_start, src_end);
+            become self.fns[byte0 as usize](self, on_token, next_token_start, src_end);
         }
-        wrapper
-    }};
-}
-
-macro_rules! token1 {
-    ($kind:ident) => {
-        token!(|src_start, _| (TokenKind::$kind, unsafe { src_start.add(1) }))
     };
 }
 
@@ -56,145 +52,44 @@ impl<F: FnMut(TokenKind, *const u8, *const u8)> JumpTable<F> {
             let mut i = 0;
             while i < 256 {
                 fns[i] = match i as u8 {
-                    b'(' => token1!(OpenParen),
-                    b')' => token1!(CloseParen),
-                    b'[' => token1!(OpenBracket),
-                    b']' => token1!(CloseBracket),
-                    b'{' => token1!(OpenBrace),
-                    b'}' => token1!(CloseBrace),
-                    b',' => token1!(Comma),
-                    b';' => token1!(Semi),
-                    b':' => token1!(Colon),
-                    b'+' => token1!(Plus),
-                    b'-' => token1!(Minus),
-                    b'*' => token1!(Star),
-                    b'%' => token1!(Percent),
-                    b'=' => token1!(Eq),
-                    b'&' => token1!(And),
-                    b'|' => token1!(Or),
-                    b'$' => token1!(Dollar),
-                    b'?' => token1!(Question),
-                    b'~' => token1!(Tilde),
-                    b'#' => token1!(Hash),
-                    b'@' => token1!(At),
-                    b'.' => token1!(Dot),
-                    b'!' => token1!(Bang),
-                    b'>' => token1!(Gt),
-                    b'<' => token1!(Lt),
-                    b'^' => token1!(Caret),
+                    b'(' => Self::open_paren,
+                    b')' => Self::close_paren,
+                    b'[' => Self::open_bracket,
+                    b']' => Self::close_bracket,
+                    b'{' => Self::open_brace,
+                    b'}' => Self::close_brace,
+                    b',' => Self::comma,
+                    b';' => Self::semi,
+                    b':' => Self::colon,
+                    b'+' => Self::plus,
+                    b'-' => Self::minus,
+                    b'*' => Self::star,
+                    b'%' => Self::percent,
+                    b'=' => Self::eq,
+                    b'&' => Self::and,
+                    b'|' => Self::or,
+                    b'$' => Self::dollar,
+                    b'?' => Self::question,
+                    b'~' => Self::tilde,
+                    b'#' => Self::hash,
+                    b'@' => Self::at,
+                    b'.' => Self::dot,
+                    b'!' => Self::bang,
+                    b'>' => Self::gt,
+                    b'<' => Self::lt,
+                    b'^' => Self::caret,
 
-                    b' ' | b'\t' | b'\n' | b'\r' => token!(|token_start, _| {
-                        let mut token_end = unsafe { token_start.add(1) };
-                        loop {
-                            let byte = unsafe { token_end.read() };
-                            if !matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
-                                break;
-                            }
-                            token_end = unsafe { token_end.add(1) };
-                        }
-                        (TokenKind::Whitespace, token_end)
-                    }),
-                    b'/' => token!(|token_start, src_end| {
-                        let cur = unsafe { token_start.add(1) };
-                        let byte1 = unsafe { cur.read() };
-                        unsafe {
-                            match byte1 {
-                                b'/' => (
-                                    TokenKind::LineComment,
-                                    eat_line_comment(cur.add(1), src_end),
-                                ),
-                                b'*' => (
-                                    TokenKind::BlockComment,
-                                    eat_block_comment(cur.add(1), src_end),
-                                ),
-                                _ => (TokenKind::Slash, cur),
-                            }
-                        }
-                    }),
+                    b' ' | b'\t' | b'\n' | b'\r' => Self::whitespace,
+                    b'/' => Self::slash_or_comment,
 
-                    b'\"' => token!(|token_start, src_end| (
-                        TokenKind::Str,
-                        eat_double_quote_string(token_start, src_end)
-                    )),
-                    b'\'' => token!(|token_start, src_end| char_or_lifetime(token_start, src_end)),
+                    b'"' => Self::string,
+                    b'\'' => Self::char_or_lifetime,
+                    b'b' => Self::b_string_or_ident,
+                    b'c' => Self::c_string_or_ident,
+                    b'r' => Self::r_string_or_ident,
 
-                    b'b' => token!(|token_start, src_end| unsafe {
-                        let cur = token_start.add(1);
-                        match cur.read() {
-                            b'\'' => {
-                                return (TokenKind::Byte, eat_single_quote_string(cur, src_end));
-                            }
-                            b'\"' => {
-                                return (TokenKind::ByteStr, eat_double_quote_string(cur, src_end));
-                            }
-                            b'r' => match cur.add(1).read() {
-                                b'\"' => {
-                                    return (
-                                        TokenKind::RawByteStr,
-                                        eat_raw_string(cur.add(1), src_end),
-                                    );
-                                }
-                                b'#' => {
-                                    return (
-                                        TokenKind::RawByteStr,
-                                        eat_hash_string(cur.add(2), src_end),
-                                    );
-                                }
-                                _ => {}
-                            },
-                            _ => {}
-                        }
-                        (TokenKind::Ident, eat_ident(token_start, src_end))
-                    }),
-                    b'c' => token!(|token_start, src_end| unsafe {
-                        let cur = token_start.add(1);
-                        match cur.read() {
-                            b'\"' => {
-                                return (TokenKind::CStr, eat_double_quote_string(cur, src_end));
-                            }
-                            b'r' => match cur.add(1).read() {
-                                b'\"' => {
-                                    return (
-                                        TokenKind::RawCStr,
-                                        eat_raw_string(cur.add(1), src_end),
-                                    );
-                                }
-                                b'#' => {
-                                    return (
-                                        TokenKind::RawCStr,
-                                        eat_hash_string(cur.add(2), src_end),
-                                    );
-                                }
-                                _ => {}
-                            },
-                            _ => {}
-                        }
-                        (TokenKind::Ident, eat_ident(token_start, src_end))
-                    }),
-                    b'r' => token!(|token_start, src_end| unsafe {
-                        let cur = token_start.add(1);
-                        match cur.read() {
-                            b'\"' => return (TokenKind::RawStr, eat_raw_string(cur, src_end)),
-                            b'#' => match cur.add(1).read() {
-                                b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                                    return (TokenKind::RawIdent, eat_ident(cur.add(2), src_end));
-                                }
-                                _ => {
-                                    return (
-                                        TokenKind::RawStr,
-                                        eat_hash_string(cur.add(1), src_end),
-                                    );
-                                }
-                            },
-                            _ => {}
-                        }
-                        (TokenKind::Ident, eat_ident(token_start, src_end))
-                    }),
-
-                    b'a'..=b'z' | b'A'..=b'Z' | b'_' => token!(|token_start, src_end| {
-                        (TokenKind::Ident, eat_ident(token_start, src_end))
-                    }),
-                    b'0'..=b'9' => token!(|token_start, src_end| number(token_start, src_end)),
+                    b'a'..=b'z' | b'A'..=b'Z' | b'_' => Self::ident,
+                    b'0'..=b'9' => Self::number,
 
                     EOF_BYTE => Self::eof,
                     _ => Self::unknown,
@@ -205,6 +100,7 @@ impl<F: FnMut(TokenKind, *const u8, *const u8)> JumpTable<F> {
         }
     }
 
+    #[allow(clippy::unused_self)]
     extern "rust-preserve-none" fn eof(&self, _: F, _: *const u8, _: *const u8) {}
     extern "rust-preserve-none" fn unknown(
         &self,
@@ -219,8 +115,111 @@ impl<F: FnMut(TokenKind, *const u8, *const u8)> JumpTable<F> {
         let byte0 = unsafe { next_token_start.read() };
         become self.fns[byte0 as usize](self, on_token, next_token_start, src_end);
     }
+
+    def_wrapper!(open_paren);
+    def_wrapper!(close_paren);
+    def_wrapper!(open_bracket);
+    def_wrapper!(close_bracket);
+    def_wrapper!(open_brace);
+    def_wrapper!(close_brace);
+    def_wrapper!(comma);
+    def_wrapper!(semi);
+    def_wrapper!(colon);
+    def_wrapper!(plus);
+    def_wrapper!(minus);
+    def_wrapper!(star);
+    def_wrapper!(percent);
+    def_wrapper!(eq);
+    def_wrapper!(and);
+    def_wrapper!(or);
+    def_wrapper!(dollar);
+    def_wrapper!(question);
+    def_wrapper!(tilde);
+    def_wrapper!(hash);
+    def_wrapper!(at);
+    def_wrapper!(dot);
+    def_wrapper!(bang);
+    def_wrapper!(gt);
+    def_wrapper!(lt);
+    def_wrapper!(caret);
+
+    def_wrapper!(whitespace);
+    def_wrapper!(slash_or_comment);
+    def_wrapper!(string);
+    def_wrapper!(char_or_lifetime);
+    def_wrapper!(b_string_or_ident);
+    def_wrapper!(c_string_or_ident);
+    def_wrapper!(r_string_or_ident);
+    def_wrapper!(ident);
+    def_wrapper!(number);
 }
 
+#[rustfmt::skip]
+macro_rules! def_punctuation {
+    ($name:ident, $kind:ident) => {
+        fn $name(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+            (TokenKind::$kind, unsafe { token_start.add(1) })
+        }
+    };
+}
+
+def_punctuation!(open_paren, OpenParen);
+def_punctuation!(close_paren, CloseParen);
+def_punctuation!(open_bracket, OpenBracket);
+def_punctuation!(close_bracket, CloseBracket);
+def_punctuation!(open_brace, OpenBrace);
+def_punctuation!(close_brace, CloseBrace);
+def_punctuation!(comma, Comma);
+def_punctuation!(semi, Semi);
+def_punctuation!(colon, Colon);
+def_punctuation!(plus, Plus);
+def_punctuation!(minus, Minus);
+def_punctuation!(star, Star);
+def_punctuation!(percent, Percent);
+def_punctuation!(eq, Eq);
+def_punctuation!(and, And);
+def_punctuation!(or, Or);
+def_punctuation!(dollar, Dollar);
+def_punctuation!(question, Question);
+def_punctuation!(tilde, Tilde);
+def_punctuation!(hash, Hash);
+def_punctuation!(at, At);
+def_punctuation!(dot, Dot);
+def_punctuation!(bang, Bang);
+def_punctuation!(gt, Gt);
+def_punctuation!(lt, Lt);
+def_punctuation!(caret, Caret);
+
+#[inline]
+fn whitespace(mut cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+    unsafe {
+        cur = cur.add(1);
+        while let b' ' | b'\t' | b'\n' = cur.read() {
+            cur = cur.add(1);
+        }
+        (TokenKind::Whitespace, cur)
+    }
+}
+
+#[inline]
+fn slash_or_comment(mut cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+    cur = unsafe { cur.add(1) };
+    let byte1 = unsafe { cur.read() };
+    unsafe {
+        match byte1 {
+            b'/' => (
+                TokenKind::LineComment,
+                eat_line_comment(cur.add(1), src_end),
+            ),
+            b'*' => (
+                TokenKind::BlockComment,
+                eat_block_comment(cur.add(1), src_end),
+            ),
+            _ => (TokenKind::Slash, cur),
+        }
+    }
+}
+#[inline]
 fn eat_line_comment(cur: *const u8, src_end: *const u8) -> *const u8 {
     let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
     match memchr::memchr(b'\n', haystack) {
@@ -228,7 +227,7 @@ fn eat_line_comment(cur: *const u8, src_end: *const u8) -> *const u8 {
         Some(off) => unsafe { cur.add(off) },
     }
 }
-
+#[inline]
 fn eat_block_comment(cur: *const u8, src_end: *const u8) -> *const u8 {
     let mut depth = 1usize;
 
@@ -252,94 +251,7 @@ fn eat_block_comment(cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe { src_end.sub(EOF_PADDING) }
 }
 
-fn eat_ident(cur: *const u8, src_end: *const u8) -> *const u8 {
-    let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
-    let (chunks, rest) = haystack.as_chunks::<16>();
-    for chunk in chunks {
-        let vec = Simd::from_array(*chunk);
-        let mask = (vec.simd_eq(Simd::splat(b'_')))
-            | (Simd::splat(b'a').simd_le(vec) & vec.simd_le(Simd::splat(b'z')))
-            | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
-            | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')));
-
-        if let Some(off) = first_set(!mask) {
-            return unsafe { chunk.as_ptr().add(off) };
-        }
-    }
-    let mut output = rest;
-    while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = output {
-        output = rest;
-    }
-    output.as_ptr()
-}
-
-fn eat_decimal(cur: *const u8, src_end: *const u8) -> *const u8 {
-    let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
-    let (chunks, rest) = haystack.as_chunks::<16>();
-    for chunk in chunks {
-        let vec = Simd::from_array(*chunk);
-        let mask = (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')))
-            | vec.simd_eq(Simd::splat(b'_'));
-
-        if let Some(off) = first_set(!mask) {
-            return unsafe { chunk.as_ptr().add(off) };
-        }
-    }
-    let mut output = rest;
-    while let [b'0'..=b'9' | b'_', rest @ ..] = output {
-        output = rest;
-    }
-    output.as_ptr()
-}
-
-fn number(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
-    let mut cur = eat_decimal(cur, src_end);
-
-    unsafe {
-        let mut kind = match cur.read() {
-            b'.' => match cur.add(1).read() {
-                b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_' => TokenKind::Int,
-                _ => {
-                    cur = cur.add(1);
-                    while let b'0'..=b'9' | b'_' = cur.read() {
-                        cur = cur.add(1);
-                    }
-                    TokenKind::Float
-                }
-            },
-            _ => TokenKind::Int,
-        };
-
-        if let b'e' | b'E' = cur.read() {
-            kind = TokenKind::Float;
-            cur = cur.add(1);
-
-            if let b'+' | b'-' = cur.read() {
-                cur = cur.add(1);
-            }
-        }
-
-        (kind, eat_ident(cur, src_end))
-    }
-}
-
-fn eat_single_quote_string(token_start: *const u8, src_end: *const u8) -> *const u8 {
-    unsafe {
-        let mut cur = token_start.add(1);
-        loop {
-            match cur.read() {
-                b'\'' => return cur.add(1),
-                b'\\' => match cur.add(1).read() {
-                    EOF_BYTE => return cur.add(1),
-                    _ => cur = cur.add(2),
-                },
-                EOF_BYTE => return cur,
-                _ => cur = cur.add(1),
-            }
-        }
-    }
-}
-
+#[inline]
 fn char_or_lifetime(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
     unsafe {
         let mut cur = cur.add(1);
@@ -357,7 +269,78 @@ fn char_or_lifetime(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8
 
     (TokenKind::Char, eat_single_quote_string(cur, src_end))
 }
-
+#[inline]
+fn string(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+    (TokenKind::Str, eat_double_quote_string(cur, src_end))
+}
+#[inline]
+fn b_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+    unsafe {
+        let cur = token_start.add(1);
+        match cur.read() {
+            b'\'' => return (TokenKind::Byte, eat_single_quote_string(cur, src_end)),
+            b'\"' => return (TokenKind::ByteStr, eat_double_quote_string(cur, src_end)),
+            b'r' => match cur.add(1).read() {
+                b'\"' => return (TokenKind::RawByteStr, eat_raw_string(cur.add(1), src_end)),
+                b'#' => return (TokenKind::RawByteStr, eat_hash_string(cur.add(2), src_end)),
+                _ => {}
+            },
+            _ => {}
+        }
+        (TokenKind::Ident, eat_ident(token_start, src_end))
+    }
+}
+#[inline]
+fn c_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+    unsafe {
+        let cur = token_start.add(1);
+        match cur.read() {
+            b'\"' => return (TokenKind::CStr, eat_double_quote_string(cur, src_end)),
+            b'r' => match cur.add(1).read() {
+                b'\"' => return (TokenKind::RawCStr, eat_raw_string(cur.add(1), src_end)),
+                b'#' => return (TokenKind::RawCStr, eat_hash_string(cur.add(2), src_end)),
+                _ => {}
+            },
+            _ => {}
+        }
+        (TokenKind::Ident, eat_ident(token_start, src_end))
+    }
+}
+#[inline]
+fn r_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+    unsafe {
+        let cur = token_start.add(1);
+        match cur.read() {
+            b'\"' => return (TokenKind::RawStr, eat_raw_string(cur, src_end)),
+            b'#' => match cur.add(1).read() {
+                b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
+                    return (TokenKind::RawIdent, eat_ident(cur.add(2), src_end));
+                }
+                _ => return (TokenKind::RawStr, eat_hash_string(cur.add(1), src_end)),
+            },
+            _ => {}
+        }
+        (TokenKind::Ident, eat_ident(token_start, src_end))
+    }
+}
+#[inline]
+fn eat_single_quote_string(token_start: *const u8, _src_end: *const u8) -> *const u8 {
+    unsafe {
+        let mut cur = token_start.add(1);
+        loop {
+            match cur.read() {
+                b'\'' => return cur.add(1),
+                b'\\' => match cur.add(1).read() {
+                    EOF_BYTE => return cur.add(1),
+                    _ => cur = cur.add(2),
+                },
+                EOF_BYTE => return cur,
+                _ => cur = cur.add(1),
+            }
+        }
+    }
+}
+#[inline]
 fn eat_double_quote_string(cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         let cur = cur.add(1);
@@ -377,7 +360,7 @@ fn eat_double_quote_string(cur: *const u8, src_end: *const u8) -> *const u8 {
         src_end.sub(EOF_PADDING)
     }
 }
-
+#[inline]
 fn eat_raw_string(cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         let cur = cur.add(1);
@@ -388,7 +371,7 @@ fn eat_raw_string(cur: *const u8, src_end: *const u8) -> *const u8 {
         }
     }
 }
-
+#[inline]
 fn eat_hash_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     let mut num_hashes = 1;
 
@@ -418,6 +401,82 @@ fn eat_hash_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
         }
 
         src_end.sub(EOF_PADDING)
+    }
+}
+
+#[inline]
+fn ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+    (TokenKind::Ident, eat_ident(token_start, src_end))
+}
+#[inline]
+fn eat_ident(cur: *const u8, src_end: *const u8) -> *const u8 {
+    let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
+    let (chunks, rest) = haystack.as_chunks::<16>();
+    for chunk in chunks {
+        let vec = Simd::from_array(*chunk);
+        let mask = (vec.simd_eq(Simd::splat(b'_')))
+            | (Simd::splat(b'a').simd_le(vec) & vec.simd_le(Simd::splat(b'z')))
+            | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
+            | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')));
+
+        if let Some(off) = first_set(!mask) {
+            return unsafe { chunk.as_ptr().add(off) };
+        }
+    }
+    let mut output = rest;
+    while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = output {
+        output = rest;
+    }
+    output.as_ptr()
+}
+#[inline]
+fn eat_decimal(cur: *const u8, src_end: *const u8) -> *const u8 {
+    let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
+    let (chunks, rest) = haystack.as_chunks::<16>();
+    for chunk in chunks {
+        let vec = Simd::from_array(*chunk);
+        let mask = (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')))
+            | vec.simd_eq(Simd::splat(b'_'));
+
+        if let Some(off) = first_set(!mask) {
+            return unsafe { chunk.as_ptr().add(off) };
+        }
+    }
+    let mut output = rest;
+    while let [b'0'..=b'9' | b'_', rest @ ..] = output {
+        output = rest;
+    }
+    output.as_ptr()
+}
+#[inline]
+fn number(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+    let mut cur = eat_decimal(cur, src_end);
+
+    unsafe {
+        let mut kind = match cur.read() {
+            b'.' => match cur.add(1).read() {
+                b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_' => TokenKind::Int,
+                _ => {
+                    cur = cur.add(1);
+                    while let b'0'..=b'9' | b'_' = cur.read() {
+                        cur = cur.add(1);
+                    }
+                    TokenKind::Float
+                }
+            },
+            _ => TokenKind::Int,
+        };
+
+        if let b'e' | b'E' = cur.read() {
+            kind = TokenKind::Float;
+            cur = cur.add(1);
+
+            if let b'+' | b'-' = cur.read() {
+                cur = cur.add(1);
+            }
+        }
+
+        (kind, eat_ident(cur, src_end))
     }
 }
 

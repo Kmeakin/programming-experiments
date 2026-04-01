@@ -2,8 +2,7 @@
     explicit_tail_calls,
     portable_simd,
     rust_preserve_none_cc,
-    slice_from_ptr_range,
-    bstr
+    slice_from_ptr_range
 )]
 #![allow(incomplete_features)]
 
@@ -20,10 +19,6 @@ pub mod stdx;
 #[cfg(test)]
 mod tests;
 
-pub fn rustc_lex_iter(input: &str) -> impl Iterator<Item = (TokenKind, u32)> {
-    rustc::tokenize(input, rustc::FrontmatterAllowed::No)
-        .map(|token| (TokenKind::from(token.kind), token.len))
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TokenKind {
@@ -166,115 +161,4 @@ pub enum TokenKind {
 
     /// End of input.
     Eof,
-}
-
-impl From<rustc::TokenKind> for TokenKind {
-    fn from(value: rustc::TokenKind) -> Self {
-        match value {
-            rustc::TokenKind::LineComment { .. } => Self::LineComment,
-            rustc::TokenKind::BlockComment { .. } => Self::BlockComment,
-            rustc::TokenKind::Whitespace => Self::Whitespace,
-            rustc::TokenKind::Ident => Self::Ident,
-            rustc::TokenKind::RawIdent => Self::RawIdent,
-            rustc::TokenKind::Literal { kind, .. } => match kind {
-                rustc::LiteralKind::Int { .. } => Self::Int,
-                rustc::LiteralKind::Float { .. } => Self::Float,
-                rustc::LiteralKind::Char { .. } => Self::Char,
-                rustc::LiteralKind::Byte { .. } => Self::Byte,
-                rustc::LiteralKind::Str { .. } => Self::Str,
-                rustc::LiteralKind::ByteStr { .. } => Self::ByteStr,
-                rustc::LiteralKind::RawStr { .. } => Self::RawStr,
-                rustc::LiteralKind::RawByteStr { .. } => Self::RawByteStr,
-                rustc::LiteralKind::CStr { .. } => Self::CStr,
-                rustc::LiteralKind::RawCStr { .. } => Self::RawCStr,
-            },
-            rustc::TokenKind::Lifetime { .. } => Self::Lifetime,
-            rustc::TokenKind::Semi => Self::Semi,
-            rustc::TokenKind::Comma => Self::Comma,
-            rustc::TokenKind::Dot => Self::Dot,
-            rustc::TokenKind::OpenParen => Self::OpenParen,
-            rustc::TokenKind::CloseParen => Self::CloseParen,
-            rustc::TokenKind::OpenBrace => Self::OpenBrace,
-            rustc::TokenKind::CloseBrace => Self::CloseBrace,
-            rustc::TokenKind::OpenBracket => Self::OpenBracket,
-            rustc::TokenKind::CloseBracket => Self::CloseBracket,
-            rustc::TokenKind::At => Self::At,
-            rustc::TokenKind::Pound => Self::Hash,
-            rustc::TokenKind::Tilde => Self::Tilde,
-            rustc::TokenKind::Question => Self::Question,
-            rustc::TokenKind::Colon => Self::Colon,
-            rustc::TokenKind::Dollar => Self::Dollar,
-            rustc::TokenKind::Eq => Self::Eq,
-            rustc::TokenKind::Bang => Self::Bang,
-            rustc::TokenKind::Lt => Self::Lt,
-            rustc::TokenKind::Gt => Self::Gt,
-            rustc::TokenKind::Minus => Self::Minus,
-            rustc::TokenKind::And => Self::And,
-            rustc::TokenKind::Or => Self::Or,
-            rustc::TokenKind::Plus => Self::Plus,
-            rustc::TokenKind::Star => Self::Star,
-            rustc::TokenKind::Slash => Self::Slash,
-            rustc::TokenKind::Caret => Self::Caret,
-            rustc::TokenKind::Percent => Self::Percent,
-            rustc::TokenKind::Unknown => Self::Unknown,
-            rustc::TokenKind::Frontmatter { .. } => Self::Frontmatter,
-            rustc::TokenKind::InvalidIdent => todo!(),
-            rustc::TokenKind::UnknownPrefix => todo!(),
-            rustc::TokenKind::UnknownPrefixLifetime => todo!(),
-            rustc::TokenKind::RawLifetime => todo!(),
-            rustc::TokenKind::GuardedStrPrefix => todo!(),
-            rustc::TokenKind::Eof => todo!(),
-        }
-    }
-}
-
-impl From<logos::TokenKind> for TokenKind {
-    fn from(value: logos::TokenKind) -> Self {
-        match value {
-            logos::TokenKind::LineComment => Self::LineComment,
-            logos::TokenKind::BlockComment => Self::BlockComment,
-            logos::TokenKind::Whitespace => Self::Whitespace,
-            logos::TokenKind::Ident => Self::Ident,
-            logos::TokenKind::RawIdent => Self::RawIdent,
-            logos::TokenKind::Int => Self::Int,
-            logos::TokenKind::Float => Self::Float,
-            logos::TokenKind::Char => Self::Char,
-            logos::TokenKind::Byte => Self::Byte,
-            logos::TokenKind::Str => Self::Str,
-            logos::TokenKind::ByteStr => Self::ByteStr,
-            logos::TokenKind::RawStr => Self::RawStr,
-            logos::TokenKind::RawByteStr => Self::RawByteStr,
-            logos::TokenKind::RawCStr => Self::RawCStr,
-            logos::TokenKind::CStr => Self::CStr,
-            logos::TokenKind::Lifetime => Self::Lifetime,
-            logos::TokenKind::Semi => Self::Semi,
-            logos::TokenKind::Comma => Self::Comma,
-            logos::TokenKind::Dot => Self::Dot,
-            logos::TokenKind::OpenParen => Self::OpenParen,
-            logos::TokenKind::CloseParen => Self::CloseParen,
-            logos::TokenKind::OpenBrace => Self::OpenBrace,
-            logos::TokenKind::CloseBrace => Self::CloseBrace,
-            logos::TokenKind::OpenBracket => Self::OpenBracket,
-            logos::TokenKind::CloseBracket => Self::CloseBracket,
-            logos::TokenKind::At => Self::At,
-            logos::TokenKind::Pound => Self::Hash,
-            logos::TokenKind::Tilde => Self::Tilde,
-            logos::TokenKind::Question => Self::Question,
-            logos::TokenKind::Colon => Self::Colon,
-            logos::TokenKind::Dollar => Self::Dollar,
-            logos::TokenKind::Eq => Self::Eq,
-            logos::TokenKind::Bang => Self::Bang,
-            logos::TokenKind::Lt => Self::Lt,
-            logos::TokenKind::Gt => Self::Gt,
-            logos::TokenKind::Minus => Self::Minus,
-            logos::TokenKind::And => Self::And,
-            logos::TokenKind::Or => Self::Or,
-            logos::TokenKind::Plus => Self::Plus,
-            logos::TokenKind::Star => Self::Star,
-            logos::TokenKind::Slash => Self::Slash,
-            logos::TokenKind::Caret => Self::Caret,
-            logos::TokenKind::Percent => Self::Percent,
-            logos::TokenKind::Unknown => Self::Unknown,
-        }
-    }
 }
