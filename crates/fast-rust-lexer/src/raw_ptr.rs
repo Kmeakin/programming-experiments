@@ -204,20 +204,19 @@ fn whitespace(mut cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8)
 }
 
 #[inline]
-fn slash_or_comment(mut cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
-    cur = unsafe { cur.add(1) };
-    let byte1 = unsafe { cur.read() };
+fn slash_or_comment(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
     unsafe {
+        let byte1 = cur.add(1).read();
         match byte1 {
             b'/' => (
                 TokenKind::LineComment,
-                eat_line_comment(cur.add(1), src_end),
+                eat_line_comment(cur.add(2), src_end),
             ),
             b'*' => (
                 TokenKind::BlockComment,
-                eat_block_comment(cur.add(1), src_end),
+                eat_block_comment(cur.add(2), src_end),
             ),
-            _ => (TokenKind::Slash, cur),
+            _ => (TokenKind::Slash, cur.add(1)),
         }
     }
 }
@@ -238,27 +237,39 @@ fn eat_line_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     }
 }
 #[inline]
-fn eat_block_comment(cur: *const u8, src_end: *const u8) -> *const u8 {
-    let mut depth = 1usize;
-
-    let haystack = unsafe { std::slice::from_ptr_range(cur..src_end) };
-
-    for off in memchr::memchr_iter(b'/', haystack) {
-        let cur = unsafe { cur.add(off) };
-        let prev_byte = unsafe { cur.sub(1).read() };
-        let next_byte = unsafe { cur.add(1).read() };
-
-        if prev_byte == b'*' && off > 0 {
-            depth -= 1;
-            if depth == 0 {
-                return unsafe { cur.add(1) };
+fn eat_block_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
+    unsafe {
+        let mut depth = 1usize;
+        let first_star_ptr = cur.sub(1);
+        loop {
+            let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let mask = vec.simd_eq(Simd::splat(b'/'));
+            if let Some(off) = first_set(mask) {
+                let slash_ptr = cur.add(off);
+                let prev_byte = slash_ptr.sub(1).read();
+                let next_byte = slash_ptr.add(1).read();
+                cur = slash_ptr.add(1);
+                match (prev_byte, next_byte) {
+                    (b'*', _) if slash_ptr.sub(1) != first_star_ptr => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return cur;
+                        }
+                    }
+                    (_, b'*') => {
+                        depth += 1;
+                        cur = slash_ptr.add(1);
+                    }
+                    _ => {}
+                }
+            } else {
+                cur = cur.add(VEC_LEN);
+                if cur >= src_end {
+                    return src_end;
+                }
             }
-        } else if next_byte == b'*' {
-            depth += 1;
         }
     }
-
-    src_end
 }
 
 #[inline]
@@ -565,6 +576,10 @@ mod tests {
 
         check("/* EOF", &expect![[r#"(BlockComment, 0..6, "/* EOF")"#]]);
         check("/*/ EOF", &expect![[r#"(BlockComment, 0..7, "/*/ EOF")"#]]);
+    }
+
+    #[test]
+    fn block_comments2() {
         check("/**/ EOF", &expect![[r#"
             (BlockComment, 0..4, "/**/")
             (Whitespace, 4..5, " ")
