@@ -15,6 +15,7 @@ pub fn lex_loop<F: FnMut(TokenKind, *const u8, *const u8)>(src: &[u8], on_token:
         end: src_end,
     } = src.as_ptr_range();
     let byte0 = unsafe { src_start.read() };
+    let src_end = unsafe { src_end.sub(EOF_PADDING) };
     table.fns[byte0 as usize](table, on_token, src_start, src_end);
 }
 
@@ -208,7 +209,10 @@ fn slash_or_comment(mut cur: *const u8, src_end: *const u8) -> (TokenKind, *cons
     let byte1 = unsafe { cur.read() };
     unsafe {
         match byte1 {
-            b'/' => (TokenKind::LineComment, eat_line_comment(cur.add(1), src_end)),
+            b'/' => (
+                TokenKind::LineComment,
+                eat_line_comment(cur.add(1), src_end),
+            ),
             b'*' => (
                 TokenKind::BlockComment,
                 eat_block_comment(cur.add(1), src_end),
@@ -220,7 +224,6 @@ fn slash_or_comment(mut cur: *const u8, src_end: *const u8) -> (TokenKind, *cons
 #[inline]
 fn eat_line_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
-        let src_end = src_end.sub(EOF_PADDING);
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let mask = vec.simd_eq(Simd::splat(b'\n'));
@@ -255,7 +258,7 @@ fn eat_block_comment(cur: *const u8, src_end: *const u8) -> *const u8 {
         }
     }
 
-    unsafe { src_end.sub(EOF_PADDING) }
+    src_end
 }
 
 #[inline]
@@ -277,8 +280,8 @@ fn char_or_lifetime(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8
     (TokenKind::Char, eat_single_quote_string(cur, src_end))
 }
 #[inline]
-fn string(cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
-    (TokenKind::Str, eat_double_quote_string(cur))
+fn string(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+    (TokenKind::Str, eat_double_quote_string(cur, src_end))
 }
 #[inline]
 fn b_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
@@ -286,10 +289,10 @@ fn b_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, 
         let cur = token_start.add(1);
         match cur.read() {
             b'\'' => return (TokenKind::Byte, eat_single_quote_string(cur, src_end)),
-            b'\"' => return (TokenKind::ByteStr, eat_double_quote_string(cur)),
+            b'\"' => return (TokenKind::ByteStr, eat_double_quote_string(cur, src_end)),
             b'r' => match cur.add(1).read() {
-                b'\"' => return (TokenKind::RawByteStr, eat_raw_string(cur.add(1))),
-                b'#' => return (TokenKind::RawByteStr, eat_hash_string(cur.add(2))),
+                b'\"' => return (TokenKind::RawByteStr, eat_raw_string(cur.add(1), src_end)),
+                b'#' => return (TokenKind::RawByteStr, eat_hash_string(cur.add(2), src_end)),
                 _ => {}
             },
             _ => {}
@@ -298,14 +301,14 @@ fn b_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, 
     }
 }
 #[inline]
-fn c_string_or_ident(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+fn c_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
     unsafe {
         let cur = token_start.add(1);
         match cur.read() {
-            b'\"' => return (TokenKind::CStr, eat_double_quote_string(cur)),
+            b'\"' => return (TokenKind::CStr, eat_double_quote_string(cur, src_end)),
             b'r' => match cur.add(1).read() {
-                b'\"' => return (TokenKind::RawCStr, eat_raw_string(cur.add(1))),
-                b'#' => return (TokenKind::RawCStr, eat_hash_string(cur.add(2))),
+                b'\"' => return (TokenKind::RawCStr, eat_raw_string(cur.add(1), src_end)),
+                b'#' => return (TokenKind::RawCStr, eat_hash_string(cur.add(2), src_end)),
                 _ => {}
             },
             _ => {}
@@ -314,16 +317,16 @@ fn c_string_or_ident(token_start: *const u8, _src_end: *const u8) -> (TokenKind,
     }
 }
 #[inline]
-fn r_string_or_ident(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+fn r_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
     unsafe {
         let cur = token_start.add(1);
         match cur.read() {
-            b'\"' => return (TokenKind::RawStr, eat_raw_string(cur)),
+            b'\"' => return (TokenKind::RawStr, eat_raw_string(cur, src_end)),
             b'#' => match cur.add(1).read() {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                     return (TokenKind::RawIdent, eat_ident(cur.add(2)));
                 }
-                _ => return (TokenKind::RawStr, eat_hash_string(cur.add(1))),
+                _ => return (TokenKind::RawStr, eat_hash_string(cur.add(1), src_end)),
             },
             _ => {}
         }
@@ -348,13 +351,12 @@ fn eat_single_quote_string(token_start: *const u8, _src_end: *const u8) -> *cons
     }
 }
 #[inline]
-fn eat_double_quote_string(mut cur: *const u8) -> *const u8 {
+fn eat_double_quote_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         cur = cur.add(1);
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            let eof_mask = vec.simd_eq(Simd::splat(EOF_BYTE));
             if let Some(off) = first_set(quote_mask) {
                 cur = cur.add(off).add(1);
                 let mut backslashes = 0;
@@ -368,32 +370,34 @@ fn eat_double_quote_string(mut cur: *const u8) -> *const u8 {
                 }
                 continue;
             }
-            if let Some(off) = first_set(eof_mask) {
-                return cur.add(off);
-            }
+
             cur = cur.add(VEC_LEN);
+            if cur >= src_end {
+                return src_end;
+            }
         }
     }
 }
 #[inline]
-fn eat_raw_string(mut cur: *const u8) -> *const u8 {
+fn eat_raw_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         cur = cur.add(1);
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            let eof_mask = vec.simd_eq(Simd::splat(EOF_BYTE));
             if let Some(off) = first_set(quote_mask) {
                 return cur.add(off).add(1);
             }
-            if let Some(off) = first_set(eof_mask) {
-                return cur.add(off);
-            }
+
             cur = cur.add(VEC_LEN);
+            if cur >= src_end {
+                return src_end;
+            }
         }
     }
 }
-fn eat_hash_string(mut cur: *const u8) -> *const u8 {
+#[inline]
+fn eat_hash_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         let mut num_hashes = 1;
         while cur.read() == b'#' {
@@ -409,7 +413,6 @@ fn eat_hash_string(mut cur: *const u8) -> *const u8 {
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            let eof_mask = vec.simd_eq(Simd::splat(EOF_BYTE));
             if let Some(off) = first_set(quote_mask) {
                 cur = cur.add(off).add(1);
                 let mut num_hashes = num_hashes;
@@ -422,10 +425,10 @@ fn eat_hash_string(mut cur: *const u8) -> *const u8 {
                 }
                 continue;
             }
-            if let Some(off) = first_set(eof_mask) {
-                return cur.add(off);
-            }
             cur = cur.add(VEC_LEN);
+            if cur >= src_end {
+                return src_end;
+            }
         }
     }
 }
