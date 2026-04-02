@@ -491,9 +491,7 @@ fn number(cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
                 b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_' => TokenKind::Int,
                 _ => {
                     cur = cur.add(1);
-                    while let b'0'..=b'9' | b'_' = cur.read() {
-                        cur = cur.add(1);
-                    }
+                    cur = eat_decimal(cur);
                     TokenKind::Float
                 }
             },
