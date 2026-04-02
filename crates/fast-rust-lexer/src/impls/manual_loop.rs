@@ -1,345 +1,202 @@
-use crate::{TokenKind, simdx::first_set};
 use std::simd::prelude::*;
 
-type LexFn<F> = extern "rust-preserve-none" fn(&JumpTable<F>, F, &[u8]);
+use crate::{TokenKind, utils::first_set};
 
-struct JumpTable<F> {
-    fns: [LexFn<F>; 256],
-}
+#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::while_let_loop)]
+pub fn lex_loop(input: &str, mut on_token: impl FnMut(TokenKind, u32)) {
+    debug_assert!(input.len() < u32::MAX as usize);
 
-impl<F: FnMut(TokenKind, usize)> JumpTable<F> {
-    #[inline]
-    extern "rust-preserve-none" fn next(&self, on_token: F, input: &[u8]) {
-        let [byte, rest @ ..] = input else { return };
-        become self.fns[*byte as usize](self, on_token, rest);
-    }
-}
-
-#[rustfmt::skip]
-macro_rules! ret {
-    ($jump_table:expr, $on_token:expr, $kind:expr, $input:expr, $output:expr) => {{
-        let input = $input;
-        let output = $output;
-        let len = input.len() - output.len() + 1;
-        $on_token($kind, len);
-        become $jump_table.next($on_token, output);
-    }};
-}
-
-#[rustfmt::skip]
-macro_rules! single_fn {
-    ($name:ident, $kind:ident) => {
-        extern "rust-preserve-none"
-        fn $name(&self, mut on_token: F, input: &[u8]) {
-            ret!(self, on_token, TokenKind::$kind, input, input);
-        }
-    };
-}
-
-#[rustfmt::skip]
-macro_rules! wrap {
-    ($name:ident) => {
-        extern "rust-preserve-none"
-        fn $name(&self, mut on_token: F, input: &[u8]) {
-            let (kind, output) = $name(input);
-            ret!(self, on_token, kind, input, output);
-        }
-    }
-}
-
-impl<F: FnMut(TokenKind, usize)> JumpTable<F> {
-    const fn new() -> Self {
-        const {
-            let mut fns: [LexFn<F>; 256] = [Self::unknown as LexFn<F>; 256];
-            let mut i = 0;
-            while i < 256 {
-                fns[i] = match i as u8 {
-                    b'(' => Self::open_paren,
-                    b')' => Self::close_paren,
-                    b'[' => Self::open_bracket,
-                    b']' => Self::close_bracket,
-                    b'{' => Self::open_brace,
-                    b'}' => Self::close_brace,
-                    b',' => Self::comma,
-                    b';' => Self::semi,
-                    b':' => Self::colon,
-
-                    b'+' => Self::plus,
-                    b'-' => Self::minus,
-                    b'*' => Self::star,
-                    b'%' => Self::percent,
-                    b'=' => Self::eq,
-                    b'&' => Self::and,
-                    b'|' => Self::or,
-                    b'$' => Self::dollar,
-
-                    b'?' => Self::question,
-                    b'~' => Self::tilde,
-                    b'#' => Self::hash,
-                    b'@' => Self::at,
-                    b'.' => Self::dot,
-                    b'!' => Self::bang,
-                    b'>' => Self::gt,
-                    b'<' => Self::lt,
-                    b'^' => Self::caret,
-
-                    b' ' | b'\n' | b'\t' => Self::whitespace,
-                    b'/' => Self::slash_or_comment,
-
-                    b'\'' => Self::char_or_lifetime,
-                    b'"' => Self::string,
-
-                    b'b' => Self::b_string_or_ident,
-                    b'c' => Self::c_string_or_ident,
-                    b'r' => Self::r_string_or_ident,
-
-                    b'a'..=b'z' | b'A'..=b'Z' | b'_' => Self::ident,
-                    b'0'..=b'9' => Self::number,
-
-                    _ => Self::unknown,
-                };
-                i += 1;
-            }
-            Self { fns }
-        }
-    }
-
-    single_fn!(unknown, Unknown);
-    single_fn!(open_paren, OpenParen);
-    single_fn!(close_paren, CloseParen);
-    single_fn!(open_bracket, OpenBracket);
-    single_fn!(close_bracket, CloseBracket);
-    single_fn!(open_brace, OpenBrace);
-    single_fn!(close_brace, CloseBrace);
-    single_fn!(comma, Comma);
-    single_fn!(semi, Semi);
-    single_fn!(colon, Colon);
-    single_fn!(plus, Plus);
-    single_fn!(minus, Minus);
-    single_fn!(star, Star);
-    single_fn!(percent, Percent);
-    single_fn!(eq, Eq);
-    single_fn!(and, And);
-    single_fn!(or, Or);
-    single_fn!(dollar, Dollar);
-    single_fn!(question, Question);
-    single_fn!(tilde, Tilde);
-    single_fn!(hash, Hash);
-    single_fn!(at, At);
-    single_fn!(dot, Dot);
-    single_fn!(bang, Bang);
-    single_fn!(gt, Gt);
-    single_fn!(lt, Lt);
-    single_fn!(caret, Caret);
-
-    wrap!(whitespace);
-    wrap!(slash_or_comment);
-    wrap!(char_or_lifetime);
-    wrap!(string);
-    wrap!(b_string_or_ident);
-    wrap!(c_string_or_ident);
-    wrap!(r_string_or_ident);
-    wrap!(number);
-    wrap!(ident);
-}
-
-pub fn collect(bytes: &[u8]) -> Vec<(TokenKind, u32)> {
-    let mut tokens = Vec::with_capacity(bytes.len());
-    let mut ptr: *mut (TokenKind, u32) = tokens.as_mut_ptr();
-
-    lex_loop(bytes, move |kind, len| unsafe {
-        ptr.write((kind, len as u32));
-        ptr = ptr.add(1);
-    });
-
-    unsafe {
-        let len = ptr.offset_from_unsigned(tokens.as_mut_ptr());
-        tokens.set_len(len);
-    }
-
-    tokens
-}
-
-pub fn lex_loop<F: FnMut(TokenKind, usize)>(bytes: &[u8], on_token: F) {
-    let Some((byte0, rest)) = bytes.split_first() else {
-        return;
-    };
-    let jump_table = const { JumpTable::new() };
-    jump_table.fns[*byte0 as usize](&jump_table, on_token, rest);
-}
-
-#[inline]
-fn whitespace(input: &[u8]) -> (TokenKind, &[u8]) {
-    let mut output = input;
-    while let [b' ' | b'\t' | b'\n', rest @ ..] = output {
-        output = rest;
-    }
-    (TokenKind::Whitespace, output)
-}
-
-#[inline]
-fn slash_or_comment(input: &[u8]) -> (TokenKind, &[u8]) {
-    #[inline]
-    fn eat_line_comment(input: &[u8]) -> &[u8] {
-        match memchr::memchr(b'\n', input) {
-            Some(pos) => unsafe { input.get_unchecked(pos..) },
-            None => &input[input.len()..],
-        }
-    }
-
-    #[inline]
-    fn eat_block_comment(input: &[u8]) -> &[u8] {
-        let mut depth = 1usize;
-
-        for pos in memchr::memchr_iter(b'/', input) {
-            if pos > 0 && input.get(pos - 1) == Some(&b'*') {
-                depth -= 1;
-                if depth == 0 {
-                    unsafe { return input.get_unchecked(pos + 1..) };
-                }
-            } else if input.get(pos + 1) == Some(&b'*') {
-                depth += 1;
-            }
-        }
-
-        &input[input.len()..]
-    }
-
-    match input {
-        [b'/', rest @ ..] => (TokenKind::LineComment, eat_line_comment(rest)),
-        [b'*', rest @ ..] => (TokenKind::BlockComment, eat_block_comment(rest)),
-        _ => (TokenKind::Slash, input),
-    }
-}
-
-#[inline]
-fn char_or_lifetime(input: &[u8]) -> (TokenKind, &[u8]) {
-    let mut output = input;
-    if let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', _, ..] = output {
-        while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = output {
-            output = rest;
-        }
-
-        match output {
-            [b'\'', output @ ..] => return (TokenKind::Char, output),
-            _ => return (TokenKind::Lifetime, output),
-        };
-    }
-
-    (TokenKind::Char, eat_single_quote_string(input))
-}
-
-#[inline]
-fn string(input: &[u8]) -> (TokenKind, &[u8]) { (TokenKind::Str, eat_double_quote_string(input)) }
-
-#[inline]
-fn eat_single_quote_string(input: &[u8]) -> &[u8] {
-    let mut output = input;
+    let mut bytes0 = input.as_bytes();
     loop {
-        match output {
-            [b'\'', rest @ ..] => {
-                output = rest;
+        let [byte, bytes1 @ ..] = bytes0 else { break };
+        let (kind, len) = match byte {
+            b'(' => (TokenKind::OpenParen, 1),
+            b')' => (TokenKind::CloseParen, 1),
+            b'[' => (TokenKind::OpenBracket, 1),
+            b']' => (TokenKind::CloseBracket, 1),
+            b'{' => (TokenKind::OpenBrace, 1),
+            b'}' => (TokenKind::CloseBrace, 1),
+            b',' => (TokenKind::Comma, 1),
+            b';' => (TokenKind::Semi, 1),
+            b':' => (TokenKind::Colon, 1),
+
+            b'+' => (TokenKind::Plus, 1),
+            b'-' => (TokenKind::Minus, 1),
+            b'*' => (TokenKind::Star, 1),
+            b'%' => (TokenKind::Percent, 1),
+            b'=' => (TokenKind::Eq, 1),
+            b'&' => (TokenKind::And, 1),
+            b'|' => (TokenKind::Or, 1),
+            b'$' => (TokenKind::Dollar, 1),
+
+            b'?' => (TokenKind::Question, 1),
+            b'~' => (TokenKind::Tilde, 1),
+            b'#' => (TokenKind::Hash, 1),
+            b'@' => (TokenKind::At, 1),
+            b'.' => (TokenKind::Dot, 1),
+            b'!' => (TokenKind::Bang, 1),
+            b'>' => (TokenKind::Gt, 1),
+            b'<' => (TokenKind::Lt, 1),
+            b'^' => (TokenKind::Caret, 1),
+
+            b' ' | b'\n' | b'\t' => (TokenKind::Whitespace, 1 + whitespace(bytes1)),
+            b'/' => match bytes1 {
+                [b'/', bytes2 @ ..] => (TokenKind::LineComment, 2 + line_comment(bytes2)),
+                [b'*', bytes2 @ ..] => (TokenKind::BlockComment, 2 + block_comment(bytes2)),
+                _ => (TokenKind::Slash, 1),
+            },
+
+            b'b' => match bytes1 {
+                [b'\'', bytes2 @ ..] => (TokenKind::Byte, 2 + single_quote_string(bytes2)),
+                [b'"', bytes2 @ ..] => (TokenKind::ByteStr, 2 + double_quote_string(bytes2)),
+                [b'r', b'#', bytes3 @ ..] => (TokenKind::RawByteStr, 3 + hash_string(bytes3)),
+                [b'r', b'"', bytes3 @ ..] => (TokenKind::RawByteStr, 3 + raw_string(bytes3)),
+                _ => (TokenKind::Ident, ident(bytes0)),
+            },
+            b'c' => match bytes1 {
+                [b'"', bytes2 @ ..] => (TokenKind::CStr, 2 + double_quote_string(bytes2)),
+                [b'r', b'#', bytes3 @ ..] => (TokenKind::CStr, 3 + hash_string(bytes3)),
+                [b'r', b'"', bytes3 @ ..] => (TokenKind::CStr, 3 + raw_string(bytes3)),
+                _ => (TokenKind::Ident, ident(bytes0)),
+            },
+            b'r' => match bytes1 {
+                [
+                    b'#',
+                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_',
+                    bytes2 @ ..,
+                ] => (TokenKind::RawIdent, 3 + ident(bytes2)),
+                [b'#', bytes2 @ ..] => (TokenKind::RawStr, 2 + hash_string(bytes2)),
+                [b'"', bytes2 @ ..] => (TokenKind::RawStr, 2 + raw_string(bytes2)),
+                _ => (TokenKind::Ident, ident(bytes0)),
+            },
+
+            b'"' => (TokenKind::Str, 1 + double_quote_string(bytes1)),
+            b'\'' => {
+                let (kind, len) = char_or_lifetime(bytes1);
+                (kind, 1 + len)
+            }
+
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' => (TokenKind::Ident, ident(bytes0)),
+            b'0'..=b'9' => number(bytes0),
+            _ => (TokenKind::Unknown, 1),
+        };
+        bytes0 = unsafe { bytes0.get_unchecked(len..) };
+        on_token(kind, len as u32);
+    }
+}
+
+fn whitespace(mut bytes: &[u8]) -> usize {
+    let mut len = 0;
+
+    while let [b' ' | b'\n' | b'\t', rest @ ..] = bytes {
+        bytes = rest;
+        len += 1;
+    }
+
+    len
+}
+
+fn line_comment(bytes: &[u8]) -> usize {
+    match memchr::memchr(b'\n', bytes) {
+        Some(pos) => pos,
+        None => bytes.len(),
+    }
+}
+
+fn block_comment(bytes: &[u8]) -> usize {
+    let mut depth = 1u32;
+
+    for pos in memchr::memchr_iter(b'/', bytes) {
+        if pos > 0 && bytes.get(pos - 1) == Some(&b'*') {
+            depth -= 1;
+            if depth == 0 {
+                return pos + 1;
+            }
+        } else if bytes.get(pos + 1) == Some(&b'*') {
+            depth += 1;
+        }
+    }
+
+    bytes.len()
+}
+
+fn single_quote_string(bytes: &[u8]) -> usize {
+    let mut len = 0;
+    let mut bytes = bytes;
+    loop {
+        match bytes {
+            [b'\'', ..] => {
+                len += 1;
                 break;
             }
-            [] => break,
-            [b'\\', _, rest @ ..] | [_, rest @ ..] => output = rest,
+            | [] => break,
+            [b'\\', _, rest @ ..] => {
+                len += 2;
+                bytes = rest;
+            }
+            [_, rest @ ..] => {
+                len += 1;
+                bytes = rest;
+            }
         }
     }
-    output
+    len
 }
 
-#[inline]
-fn eat_double_quote_string(input: &[u8]) -> &[u8] {
-    for pos in memchr::memchr_iter(b'"', input) {
-        let backslashes = unsafe { input.get_unchecked(..pos) }
+fn double_quote_string(bytes: &[u8]) -> usize {
+    for pos in memchr::memchr_iter(b'"', bytes) {
+        let backslashes = bytes[..pos]
             .iter()
             .rev()
             .take_while(|&&b| b == b'\\')
             .count();
         if backslashes % 2 == 0 {
-            unsafe { return input.get_unchecked(pos + 1..) };
+            return pos + 1;
         }
     }
-    &input[input.len()..]
+    bytes.len()
 }
 
-#[inline]
-fn b_string_or_ident(input: &[u8]) -> (TokenKind, &[u8]) {
-    match input {
-        [b'\'', rest @ ..] => (TokenKind::Byte, eat_single_quote_string(rest)),
-        [b'"', rest @ ..] => (TokenKind::ByteStr, eat_double_quote_string(rest)),
-        [b'r', b'#', rest @ ..] => (TokenKind::RawByteStr, eat_hash_string(rest)),
-        [b'r', b'"', rest @ ..] => (TokenKind::RawByteStr, eat_raw_string(rest)),
-        _ => (TokenKind::Ident, eat_ident(input)),
-    }
-}
-
-#[inline]
-fn c_string_or_ident(input: &[u8]) -> (TokenKind, &[u8]) {
-    match input {
-        [b'"', rest @ ..] => (TokenKind::CStr, eat_double_quote_string(rest)),
-        [b'r', b'#', rest @ ..] => (TokenKind::RawCStr, eat_hash_string(rest)),
-        [b'r', b'"', rest @ ..] => (TokenKind::RawCStr, eat_raw_string(rest)),
-        _ => (TokenKind::Ident, eat_ident(input)),
-    }
-}
-
-#[inline]
-fn r_string_or_ident(input: &[u8]) -> (TokenKind, &[u8]) {
-    match input {
-        [
-            b'#',
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_',
-            rest @ ..,
-        ] => (TokenKind::RawIdent, eat_ident(rest)),
-        [b'#', rest @ ..] => (TokenKind::RawStr, eat_hash_string(rest)),
-        [b'"', rest @ ..] => (TokenKind::RawStr, eat_raw_string(rest)),
-        _ => (TokenKind::Ident, eat_ident(input)),
-    }
-}
-
-#[inline]
-fn eat_hash_string(input: &[u8]) -> &[u8] {
-    let mut output = input;
+fn hash_string(mut bytes: &[u8]) -> usize {
+    let orig_len = bytes.len();
     let mut num_hashes = 1;
 
-    while let [b'#', rest @ ..] = output {
+    while let [b'#', rest @ ..] = bytes {
         num_hashes += 1;
-        output = rest;
+        bytes = rest;
     }
 
-    let [b'"', output @ ..] = output else {
-        return output;
+    let [b'"', bytes @ ..] = bytes else {
+        return bytes.len();
     };
 
-    for pos in memchr::memchr_iter(b'"', output) {
-        if unsafe { output.get_unchecked(pos + 1..) }
+    for pos in memchr::memchr_iter(b'"', bytes) {
+        if bytes[pos + 1..]
             .iter()
             .take_while(|&&b| b == b'#')
             .take(num_hashes)
             .count()
             == num_hashes
         {
-            return unsafe { output.get_unchecked(pos + num_hashes + 1..) };
+            return pos + num_hashes * 2 + 1;
         }
     }
 
-    &output[output.len()..]
+    orig_len
 }
 
-#[inline]
-fn eat_raw_string(input: &[u8]) -> &[u8] {
-    match memchr::memchr(b'"', input) {
-        Some(pos) => unsafe { input.get_unchecked(pos + 1..) },
-        None => &input[input.len()..],
+fn raw_string(bytes: &[u8]) -> usize {
+    match memchr::memchr(b'"', bytes) {
+        Some(pos) => pos + 1,
+        None => bytes.len(),
     }
 }
 
-#[inline]
-fn eat_ident(input: &[u8]) -> &[u8] {
+fn ident(bytes: &[u8]) -> usize {
     let mut len = 0;
 
-    let (chunks, mut output) = input.as_chunks::<16>();
+    let (chunks, mut bytes) = bytes.as_chunks::<16>();
     for chunk in chunks {
         let vec = Simd::from_array(*chunk);
         let mask = !((vec.simd_eq(Simd::splat(b'_')))
@@ -349,51 +206,19 @@ fn eat_ident(input: &[u8]) -> &[u8] {
 
         match first_set(mask) {
             None => len += 16,
-            Some(pos) => unsafe { return input.get_unchecked(len + pos..) },
+            Some(pos) => return len + pos,
         }
     }
-    while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = output {
-        output = rest;
+    while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = bytes {
+        len += 1;
+        bytes = rest;
     }
-    output
+    len
 }
 
-#[inline]
-fn ident(input: &[u8]) -> (TokenKind, &[u8]) { (TokenKind::Ident, eat_ident(input)) }
-
-#[inline]
-fn number(input: &[u8]) -> (TokenKind, &[u8]) {
-    let mut output = eat_decimal(input);
-
-    let mut kind = match output {
-        [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => TokenKind::Int,
-        [b'.', rest @ ..] => {
-            output = rest;
-            while let [b'0'..=b'9' | b'_', rest @ ..] = output {
-                output = rest;
-            }
-
-            TokenKind::Float
-        }
-        _ => TokenKind::Int,
-    };
-
-    if let [b'e' | b'E', rest @ ..] = output {
-        kind = TokenKind::Float;
-        output = rest;
-
-        if let [b'+' | b'-', rest @ ..] = output {
-            output = rest;
-        }
-    }
-
-    (kind, eat_ident(output))
-}
-
-#[inline]
-fn eat_decimal(input: &[u8]) -> &[u8] {
+fn decimal(bytes: &[u8]) -> usize {
     let mut len = 0;
-    let (chunks, rest) = input.as_chunks::<16>();
+    let (chunks, mut bytes) = bytes.as_chunks::<16>();
     for chunk in chunks {
         let vec = Simd::from_array(*chunk);
         let mask = !((Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')))
@@ -401,14 +226,85 @@ fn eat_decimal(input: &[u8]) -> &[u8] {
 
         match first_set(mask) {
             None => len += 16,
-            Some(pos) => unsafe { return input.get_unchecked(len + pos..) },
+            Some(pos) => return len + pos,
         }
     }
-    let mut output = rest;
-    while let [b'0'..=b'9' | b'_', rest @ ..] = output {
-        output = rest;
+    while let [b'0'..=b'9' | b'_', rest @ ..] = bytes {
+        len += 1;
+        bytes = rest;
     }
-    output
+    len
+}
+
+fn number(bytes: &[u8]) -> (TokenKind, usize) {
+    let mut len = decimal(bytes);
+    let mut bytes = &bytes[len..];
+
+    let mut kind = match bytes {
+        [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => TokenKind::Int,
+        [b'.', rest @ ..] => {
+            len += 1;
+            bytes = rest;
+            while let [b'0'..=b'9' | b'_', rest @ ..] = bytes {
+                len += 1;
+                bytes = rest;
+            }
+
+            TokenKind::Float
+        }
+        _ => TokenKind::Int,
+    };
+
+    if let [b'e' | b'E', rest @ ..] = bytes {
+        kind = TokenKind::Float;
+
+        len += 1;
+        bytes = rest;
+
+        if let [b'+' | b'-', rest @ ..] = bytes {
+            len += 1;
+            bytes = rest;
+        }
+    }
+
+    len += ident(bytes);
+
+    (kind, len)
+}
+
+fn char_or_lifetime(mut bytes1: &[u8]) -> (TokenKind, usize) {
+    let mut len = 0;
+
+    if let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', _, ..] = bytes1 {
+        while let [b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', rest @ ..] = bytes1 {
+            len += 1;
+            bytes1 = rest;
+        }
+
+        match bytes1 {
+            [b'\'', ..] => return (TokenKind::Char, len + 1),
+            _ => return (TokenKind::Lifetime, len),
+        }
+    }
+
+    loop {
+        match bytes1 {
+            [b'\'', ..] => {
+                len += 1;
+                break;
+            }
+            | [] => break,
+            [b'\\', _, rest @ ..] => {
+                len += 2;
+                bytes1 = rest;
+            }
+            [_, rest @ ..] => {
+                len += 1;
+                bytes1 = rest;
+            }
+        }
+    }
+    (TokenKind::Char, len)
 }
 
 #[cfg(test)]
@@ -419,12 +315,12 @@ mod tests {
     fn check(input: &str, expected: &Expect) {
         let mut start = 0;
         let mut tokens = Vec::new();
-        super::lex_loop(input.as_bytes(), |kind, len| tokens.push((kind, len)));
+        super::lex_loop(input, |kind, len| tokens.push((kind, len)));
         let actual = tokens
             .into_iter()
             .map(|(kind, len)| {
                 let end = start + len;
-                let lexeme = &input[start..end];
+                let lexeme = &input[start as usize..end as usize];
                 let span = start..end;
                 start = end;
                 (kind, lexeme, span)
@@ -682,7 +578,7 @@ mod tests {
                 (Whitespace, 19..24, "\n    ")
                 (RawByteStr, 24..39, "br\"raw string\\\"")
                 (Whitespace, 39..44, "\n    ")
-                (RawCStr, 44..59, "cr\"raw string\\\"")
+                (CStr, 44..59, "cr\"raw string\\\"")
                 (Whitespace, 59..64, "\n    ")
                 (RawStr, 64..83, "r\"unterminated\n    ")"#]],
         );
@@ -752,17 +648,17 @@ mod tests {
     "###,
             &expect![[r###"
                 (Whitespace, 0..5, "\n    ")
-                (RawCStr, 5..11, "cr#\"\"#")
+                (CStr, 5..11, "cr#\"\"#")
                 (Whitespace, 11..16, "\n    ")
-                (RawCStr, 16..24, "cr##\"\"##")
+                (CStr, 16..24, "cr##\"\"##")
                 (Whitespace, 24..29, "\n    ")
-                (RawCStr, 29..52, "cr#\"raw string\"\"\"\"\"\"\"\"#")
+                (CStr, 29..52, "cr#\"raw string\"\"\"\"\"\"\"\"#")
                 (Whitespace, 52..57, "\n    ")
-                (RawCStr, 57..70, "cr#\"\"\"\"\"\"\"\"\"#")
+                (CStr, 57..70, "cr#\"\"\"\"\"\"\"\"\"#")
                 (Whitespace, 70..75, "\n    ")
-                (RawCStr, 75..89, "cr##\" ##\"\" \"##")
+                (CStr, 75..89, "cr##\" ##\"\" \"##")
                 (Whitespace, 89..94, "\n    ")
-                (RawCStr, 94..116, "cr#\"unterminated\"\n    ")"###]],
+                (CStr, 94..116, "cr#\"unterminated\"\n    ")"###]],
         );
     }
 }

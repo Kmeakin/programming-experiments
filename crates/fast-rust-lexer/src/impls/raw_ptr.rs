@@ -1,4 +1,4 @@
-use crate::{TokenKind, simdx::first_set};
+use crate::{TokenKind, utils::first_set};
 use std::{ops::Range, simd::prelude::*};
 
 type LexFn<F> = extern "rust-preserve-none" fn(&JumpTable<F>, F, *const u8, *const u8);
@@ -277,10 +277,7 @@ fn char_or_lifetime(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8
     unsafe {
         let mut cur = cur.add(1);
         if let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = cur.read() {
-            while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = cur.read() {
-                cur = cur.add(1);
-            }
-
+            cur = eat_ident(cur);
             match cur.read() {
                 b'\'' => return (TokenKind::Char, cur.add(1)),
                 _ => return (TokenKind::Lifetime, cur),

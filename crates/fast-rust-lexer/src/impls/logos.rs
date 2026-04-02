@@ -166,7 +166,7 @@ fn number(lexer: &mut Lexer<TokenKind>) -> TokenKind {
 }
 
 #[allow(clippy::cast_possible_truncation)]
-pub fn lex_iter(input: &str) -> impl Iterator<Item = (TokenKind, u32)> {
+pub fn lex_iter(input: &str) -> impl Iterator<Item = (crate::TokenKind, u32)> {
     debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
     Lexer::new(input).spanned().map(|(kind, span)| {
         let kind = match kind {
@@ -174,7 +174,7 @@ pub fn lex_iter(input: &str) -> impl Iterator<Item = (TokenKind, u32)> {
             Err(()) => TokenKind::Unknown,
         };
         let len = span.end - span.start;
-        (kind, len as u32)
+        (crate::TokenKind::from(kind), len as u32)
     })
 }
 

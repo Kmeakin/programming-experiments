@@ -1,89 +1,96 @@
 use std::simd::prelude::*;
 
-use crate::{TokenKind, simdx::first_set};
+use crate::{TokenKind, utils::first_set};
+
+pub fn lex_iter(input: &str) -> impl Iterator<Item = (TokenKind, u32)> {
+    let mut input = input.as_bytes();
+
+    std::iter::from_fn(move || {
+        let (kind, len) = lex_one(input)?;
+        input = unsafe { input.get_unchecked(len as usize..) };
+        Some((kind, len))
+    })
+}
 
 #[allow(clippy::cast_possible_truncation)]
-#[allow(clippy::while_let_loop)]
-pub fn lex_loop(input: &str, mut on_token: impl FnMut(TokenKind, u32)) {
+fn lex_one(input: &[u8]) -> Option<(TokenKind, u32)> {
     debug_assert!(input.len() < u32::MAX as usize);
 
-    let mut bytes0 = input.as_bytes();
-    loop {
-        let [byte, bytes1 @ ..] = bytes0 else { break };
-        let (kind, len) = match byte {
-            b'(' => (TokenKind::OpenParen, 1),
-            b')' => (TokenKind::CloseParen, 1),
-            b'[' => (TokenKind::OpenBracket, 1),
-            b']' => (TokenKind::CloseBracket, 1),
-            b'{' => (TokenKind::OpenBrace, 1),
-            b'}' => (TokenKind::CloseBrace, 1),
-            b',' => (TokenKind::Comma, 1),
-            b';' => (TokenKind::Semi, 1),
-            b':' => (TokenKind::Colon, 1),
+    let bytes0 = input;
+    let [byte0, bytes1 @ ..] = bytes0 else {
+        return None;
+    };
 
-            b'+' => (TokenKind::Plus, 1),
-            b'-' => (TokenKind::Minus, 1),
-            b'*' => (TokenKind::Star, 1),
-            b'%' => (TokenKind::Percent, 1),
-            b'=' => (TokenKind::Eq, 1),
-            b'&' => (TokenKind::And, 1),
-            b'|' => (TokenKind::Or, 1),
-            b'$' => (TokenKind::Dollar, 1),
+    let (kind, len) = match byte0 {
+        b' ' | b'\n' | b'\t' => (TokenKind::Whitespace, 1 + whitespace(bytes1)),
+        b'(' => (TokenKind::OpenParen, 1),
+        b')' => (TokenKind::CloseParen, 1),
+        b'[' => (TokenKind::OpenBracket, 1),
+        b']' => (TokenKind::CloseBracket, 1),
+        b'{' => (TokenKind::OpenBrace, 1),
+        b'}' => (TokenKind::CloseBrace, 1),
+        b',' => (TokenKind::Comma, 1),
+        b';' => (TokenKind::Semi, 1),
+        b':' => (TokenKind::Colon, 1),
 
-            b'?' => (TokenKind::Question, 1),
-            b'~' => (TokenKind::Tilde, 1),
-            b'#' => (TokenKind::Hash, 1),
-            b'@' => (TokenKind::At, 1),
-            b'.' => (TokenKind::Dot, 1),
-            b'!' => (TokenKind::Bang, 1),
-            b'>' => (TokenKind::Gt, 1),
-            b'<' => (TokenKind::Lt, 1),
-            b'^' => (TokenKind::Caret, 1),
+        b'+' => (TokenKind::Plus, 1),
+        b'-' => (TokenKind::Minus, 1),
+        b'*' => (TokenKind::Star, 1),
+        b'%' => (TokenKind::Percent, 1),
+        b'=' => (TokenKind::Eq, 1),
+        b'&' => (TokenKind::And, 1),
+        b'|' => (TokenKind::Or, 1),
+        b'$' => (TokenKind::Dollar, 1),
 
-            b' ' | b'\n' | b'\t' => (TokenKind::Whitespace, 1 + whitespace(bytes1)),
-            b'/' => match bytes1 {
-                [b'/', bytes2 @ ..] => (TokenKind::LineComment, 2 + line_comment(bytes2)),
-                [b'*', bytes2 @ ..] => (TokenKind::BlockComment, 2 + block_comment(bytes2)),
-                _ => (TokenKind::Slash, 1),
-            },
+        b'?' => (TokenKind::Question, 1),
+        b'~' => (TokenKind::Tilde, 1),
+        b'#' => (TokenKind::Hash, 1),
+        b'@' => (TokenKind::At, 1),
+        b'.' => (TokenKind::Dot, 1),
+        b'!' => (TokenKind::Bang, 1),
+        b'>' => (TokenKind::Gt, 1),
+        b'<' => (TokenKind::Lt, 1),
+        b'^' => (TokenKind::Caret, 1),
 
-            b'b' => match bytes1 {
-                [b'\'', bytes2 @ ..] => (TokenKind::Byte, 2 + single_quote_string(bytes2)),
-                [b'"', bytes2 @ ..] => (TokenKind::ByteStr, 2 + double_quote_string(bytes2)),
-                [b'r', b'#', bytes3 @ ..] => (TokenKind::RawByteStr, 3 + hash_string(bytes3)),
-                [b'r', b'"', bytes3 @ ..] => (TokenKind::RawByteStr, 3 + raw_string(bytes3)),
-                _ => (TokenKind::Ident, ident(bytes0)),
-            },
-            b'c' => match bytes1 {
-                [b'"', bytes2 @ ..] => (TokenKind::CStr, 2 + double_quote_string(bytes2)),
-                [b'r', b'#', bytes3 @ ..] => (TokenKind::CStr, 3 + hash_string(bytes3)),
-                [b'r', b'"', bytes3 @ ..] => (TokenKind::CStr, 3 + raw_string(bytes3)),
-                _ => (TokenKind::Ident, ident(bytes0)),
-            },
-            b'r' => match bytes1 {
-                [
-                    b'#',
-                    b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_',
-                    bytes2 @ ..,
-                ] => (TokenKind::RawIdent, 3 + ident(bytes2)),
-                [b'#', bytes2 @ ..] => (TokenKind::RawStr, 2 + hash_string(bytes2)),
-                [b'"', bytes2 @ ..] => (TokenKind::RawStr, 2 + raw_string(bytes2)),
-                _ => (TokenKind::Ident, ident(bytes0)),
-            },
+        b'/' => match bytes1 {
+            [b'/', bytes2 @ ..] => (TokenKind::LineComment, 2 + line_comment(bytes2)),
+            [b'*', bytes2 @ ..] => (TokenKind::BlockComment, 2 + block_comment(bytes2)),
+            _ => (TokenKind::Slash, 1),
+        },
+        b'b' => match bytes1 {
+            [b'\'', bytes2 @ ..] => (TokenKind::Byte, 2 + single_quote_string(bytes2)),
+            [b'"', bytes2 @ ..] => (TokenKind::ByteStr, 2 + double_quote_string(bytes2)),
+            [b'r', b'#', bytes3 @ ..] => (TokenKind::RawByteStr, 3 + hash_string(bytes3)),
+            [b'r', b'"', bytes3 @ ..] => (TokenKind::RawByteStr, 3 + raw_string(bytes3)),
+            _ => (TokenKind::Ident, ident(bytes0)),
+        },
+        b'c' => match bytes1 {
+            [b'"', bytes2 @ ..] => (TokenKind::CStr, 2 + double_quote_string(bytes2)),
+            [b'r', b'#', bytes3 @ ..] => (TokenKind::CStr, 3 + hash_string(bytes3)),
+            [b'r', b'"', bytes3 @ ..] => (TokenKind::CStr, 3 + raw_string(bytes3)),
+            _ => (TokenKind::Ident, ident(bytes0)),
+        },
+        b'r' => match bytes1 {
+            [
+                b'#',
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_',
+                bytes2 @ ..,
+            ] => (TokenKind::RawIdent, 3 + ident(bytes2)),
+            [b'#', bytes2 @ ..] => (TokenKind::RawStr, 2 + hash_string(bytes2)),
+            [b'"', bytes2 @ ..] => (TokenKind::RawStr, 2 + raw_string(bytes2)),
+            _ => (TokenKind::Ident, ident(bytes0)),
+        },
+        b'"' => (TokenKind::Str, 1 + double_quote_string(bytes1)),
+        b'\'' => {
+            let (kind, len) = char_or_lifetime(bytes1);
+            (kind, 1 + len)
+        }
 
-            b'"' => (TokenKind::Str, 1 + double_quote_string(bytes1)),
-            b'\'' => {
-                let (kind, len) = char_or_lifetime(bytes1);
-                (kind, 1 + len)
-            }
-
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' => (TokenKind::Ident, ident(bytes0)),
-            b'0'..=b'9' => number(bytes0),
-            _ => (TokenKind::Unknown, 1),
-        };
-        bytes0 = unsafe { bytes0.get_unchecked(len..) };
-        on_token(kind, len as u32);
-    }
+        b'a'..=b'z' | b'A'..=b'Z' | b'_' => (TokenKind::Ident, ident(bytes0)),
+        b'0'..=b'9' => number(bytes0),
+        _ => (TokenKind::Unknown, 1),
+    };
+    Some((kind, len as u32))
 }
 
 fn whitespace(mut bytes: &[u8]) -> usize {
@@ -314,10 +321,7 @@ mod tests {
 
     fn check(input: &str, expected: &Expect) {
         let mut start = 0;
-        let mut tokens = Vec::new();
-        super::lex_loop(input, |kind, len| tokens.push((kind, len)));
-        let actual = tokens
-            .into_iter()
+        let actual = super::lex_iter(input)
             .map(|(kind, len)| {
                 let end = start + len;
                 let lexeme = &input[start as usize..end as usize];

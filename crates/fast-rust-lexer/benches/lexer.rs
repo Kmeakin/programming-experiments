@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput};
-use fast_rust_lexer::{raw_ptr, stdx::push_unchecked};
+use fast_rust_lexer::{raw_ptr, utils::push_unchecked};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
