@@ -1,0 +1,25 @@
+ name                       before.aarch64.data ns/iter  after.aarch64.data ns/iter  diff ns/iter   diff %  speedup 
+ chars_for_each::emoji      71,155                       81,547                            10,392   14.60%   x 0.87 
+ chars_for_each::en         197,673                      191,513                           -6,160   -3.12%   x 1.03 
+ chars_for_each::ru         112,669                      77,767                           -34,902  -30.98%   x 1.45 
+ chars_for_each::zh         66,220                       61,122                            -5,098   -7.70%   x 1.08 
+ chars_next::emoji          0                            0                                      0     NaN%    x NaN 
+ chars_next::en             0                            0                                      0     NaN%    x NaN 
+ chars_next::ru             0                            0                                      0     NaN%    x NaN 
+ chars_next::zh             0                            0                                      0     NaN%    x NaN 
+ chars_rev_for_each::emoji  87,420                       71,201                           -16,219  -18.55%   x 1.23 
+ chars_rev_for_each::en     200,856                      196,612                           -4,244   -2.11%   x 1.02 
+ chars_rev_for_each::ru     115,909                      112,961                           -2,948   -2.54%   x 1.03 
+ chars_rev_for_each::zh     83,792                       69,063                           -14,729  -17.58%   x 1.21 
+ chars_rev_next::emoji      0                            0                                      0     NaN%    x NaN 
+ chars_rev_next::en         0                            0                                      0     NaN%    x NaN 
+ chars_rev_next::ru         0                            0                                      0     NaN%    x NaN 
+ chars_rev_next::zh         0                            0                                      0     NaN%    x NaN 
+ chars_sum::emoji           74,929                       81,627                             6,698    8.94%   x 0.92 
+ chars_sum::en              191,630                      190,078                           -1,552   -0.81%   x 1.01 
+ chars_sum::ru              117,379                      84,004                           -33,375  -28.43%   x 1.40 
+ chars_sum::zh              91,780                       71,438                           -20,342  -22.16%   x 1.28 
+ chars_sum_rev::emoji       86,663                       72,415                           -14,248  -16.44%   x 1.20 
+ chars_sum_rev::en          197,858                      187,748                          -10,110   -5.11%   x 1.05 
+ chars_sum_rev::ru          116,572                      213,792                           97,220   83.40%   x 0.55 
+ chars_sum_rev::zh          85,751                       79,883                            -5,868   -6.84%   x 1.07 
