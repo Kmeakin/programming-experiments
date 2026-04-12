@@ -1,4 +1,5 @@
-#![feature(explicit_tail_calls, portable_simd, rust_preserve_none_cc)]
+#![feature(explicit_tail_calls, portable_simd, rust_preserve_none_cc, bstr)]
+#![cfg_attr(test, feature(slice_from_ptr_range))]
 #![allow(incomplete_features)]
 
 pub mod impls;
@@ -8,7 +9,6 @@ pub use crate::impls::*;
 
 #[cfg(test)]
 mod tests;
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TokenKind {

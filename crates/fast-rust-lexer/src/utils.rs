@@ -1,3 +1,4 @@
+pub mod simdx;
 pub mod tbl;
 
 use std::simd::prelude::*;

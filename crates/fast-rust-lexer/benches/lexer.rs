@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput};
-use fast_rust_lexer::{raw_ptr, utils::push_unchecked};
+use fast_rust_lexer::{multi_pass, raw_ptr, utils::push_unchecked};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -366,14 +366,50 @@ fn check_unicode(c: &mut Criterion) {
     group.finish();
 }
 
+fn memcpy(c: &mut Criterion) {
+    let input = get_input();
+
+    let mut group = c.benchmark_group("memcpy");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("string_clone", |b| {
+        b.iter(|| {
+            let output = input.clone();
+            black_box(output)
+        });
+    });
+
+    group.finish();
+}
+
+fn multi_pass(c: &mut Criterion) {
+    let input = get_input();
+    let mut input = input.into_bytes();
+    input.extend([multi_pass::EOF_BYTE; multi_pass::EOF_PADDING]);
+    let input = input.as_slice();
+
+    let mut group = c.benchmark_group("multi_pass");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("line_comments", |b| {
+        let mut output = vec![multi_pass::EOF_BYTE; input.len()];
+        b.iter(|| unsafe {
+            let output = multi_pass::line_comments(input, output.as_mut_ptr());
+            black_box(output)
+        });
+    });
+
+    group.finish();
+}
+
 fn main() {
     let mut criterion: Criterion<_> = Criterion::default().configure_from_args();
     check_unicode(&mut criterion);
+    memcpy(&mut criterion);
     rustc(&mut criterion);
     logos(&mut criterion);
     manual(&mut criterion);
     manual_loop(&mut criterion);
     jump_threading(&mut criterion);
     raw_ptr(&mut criterion);
+    multi_pass(&mut criterion);
     Criterion::default().configure_from_args().final_summary();
 }
