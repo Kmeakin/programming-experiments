@@ -3,15 +3,11 @@ use std::simd::prelude::*;
 use crate::utils::first_set;
 
 pub const EOF_BYTE: u8 = 0xFF;
-pub const VEC_LEN: usize = 16;
-pub const EOF_PADDING: usize = VEC_LEN * 2;
 
 const LINE_COMMENT: u8 = 0xFE;
 const BLOCK_COMMENT: u8 = 0xFD;
 const STRING: u8 = 0xFC;
 const CHAR: u8 = 0xFB;
-
-type Chunk = Simd<u8, VEC_LEN>;
 
 fn eq<const N: usize>(chunk: Simd<u8, N>, byte: u8) -> Mask<i8, N> {
     chunk.simd_eq(Simd::splat(byte))
@@ -19,22 +15,22 @@ fn eq<const N: usize>(chunk: Simd<u8, N>, byte: u8) -> Mask<i8, N> {
 
 /// Pass 1: Remove all line comments
 /// # Safety
-/// The caller must ensure that `input` ends with at least `EOF_PADDING` bytes
+/// The caller must ensure that `input` ends with at least `VEC_LEN * 2` bytes
 /// of `EOF_BYTE`.
-pub unsafe fn line_comments(input: &[u8], mut out: *mut u8) -> *mut u8 {
-    debug_assert!(input.ends_with(&[EOF_BYTE; EOF_PADDING]));
+pub unsafe fn line_comments<const VEC_LEN: usize>(input: &[u8], mut out: *mut u8) -> *mut u8 {
+    debug_assert!(input.ends_with([[EOF_BYTE; VEC_LEN]; 2].as_flattened()));
     let std::ops::Range { start, end } = input.as_ptr_range();
 
     unsafe {
-        let src_end = end.sub(EOF_PADDING);
+        let src_end = end.sub(VEC_LEN * 2);
         let mut cursor = start;
 
         loop {
-            let chunk = cursor.cast::<Chunk>().read_unaligned();
-            let chunk1 = cursor.add(1).cast::<Chunk>().read_unaligned();
+            let chunk = cursor.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let chunk1 = cursor.add(1).cast::<Simd<u8, VEC_LEN>>().read_unaligned();
 
             let comment_start = eq(chunk, b'/') & eq(chunk1, b'/');
-            out.cast::<Chunk>().write_unaligned(chunk);
+            out.cast::<Simd<u8, VEC_LEN>>().write_unaligned(chunk);
             match first_set(comment_start) {
                 None => {
                     cursor = cursor.add(VEC_LEN);
@@ -50,7 +46,7 @@ pub unsafe fn line_comments(input: &[u8], mut out: *mut u8) -> *mut u8 {
                     out = out.add(1);
 
                     loop {
-                        let chunk = cursor.cast::<Chunk>().read_unaligned();
+                        let chunk = cursor.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
                         let newline_mask = eq(chunk, b'\n');
                         match first_set(newline_mask) {
                             None => cursor = cursor.add(VEC_LEN),
@@ -89,14 +85,13 @@ mod tests {
     use super::*;
     use expect_test::{Expect, expect};
 
-    // #[track_caller]
     fn check(src: &str, expect: &Expect) {
         let mut input = src.to_string().into_bytes();
-        input.extend_from_slice(&[EOF_BYTE; EOF_PADDING]);
+        input.extend_from_slice(&[EOF_BYTE; 32]);
         let mut output = vec![0u8; input.len()];
 
         let out_start = output.as_ptr();
-        let out_end = unsafe { line_comments(&input, output.as_mut_ptr()) };
+        let out_end = unsafe { line_comments::<16>(&input, output.as_mut_ptr()) };
         let out = out_start..out_end.cast_const();
         let output = unsafe { std::slice::from_ptr_range(out) };
         let output = ByteStr::new(output);
