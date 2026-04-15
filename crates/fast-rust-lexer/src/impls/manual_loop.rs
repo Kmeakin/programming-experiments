@@ -1,6 +1,6 @@
 use std::simd::prelude::*;
 
-use crate::{TokenKind, utils::first_set};
+use crate::TokenKind;
 
 #[allow(clippy::cast_possible_truncation)]
 #[allow(clippy::while_let_loop)]
@@ -204,7 +204,7 @@ fn ident(bytes: &[u8]) -> usize {
             | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
             | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9'))));
 
-        match first_set(mask) {
+        match mask.first_set() {
             None => len += 16,
             Some(pos) => return len + pos,
         }
@@ -224,7 +224,7 @@ fn decimal(bytes: &[u8]) -> usize {
         let mask = !((Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')))
             | vec.simd_eq(Simd::splat(b'_')));
 
-        match first_set(mask) {
+        match mask.first_set() {
             None => len += 16,
             Some(pos) => return len + pos,
         }

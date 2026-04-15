@@ -1,7 +1,5 @@
 use std::simd::prelude::*;
 
-use crate::utils::first_set;
-
 pub const EOF_BYTE: u8 = 0xFF;
 
 const LINE_COMMENT: u8 = 0xFE;
@@ -28,10 +26,9 @@ pub unsafe fn line_comments<const VEC_LEN: usize>(input: &[u8], mut out: *mut u8
         loop {
             let chunk = cursor.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let chunk1 = cursor.add(1).cast::<Simd<u8, VEC_LEN>>().read_unaligned();
-
             let comment_start = eq(chunk, b'/') & eq(chunk1, b'/');
             out.cast::<Simd<u8, VEC_LEN>>().write_unaligned(chunk);
-            match first_set(comment_start) {
+            match comment_start.first_set() {
                 None => {
                     cursor = cursor.add(VEC_LEN);
                     out = out.add(VEC_LEN);
@@ -48,7 +45,7 @@ pub unsafe fn line_comments<const VEC_LEN: usize>(input: &[u8], mut out: *mut u8
                     loop {
                         let chunk = cursor.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
                         let newline_mask = eq(chunk, b'\n');
-                        match first_set(newline_mask) {
+                        match newline_mask.first_set() {
                             None => cursor = cursor.add(VEC_LEN),
                             Some(pos) => {
                                 cursor = cursor.add(pos);
@@ -64,7 +61,6 @@ pub unsafe fn line_comments<const VEC_LEN: usize>(input: &[u8], mut out: *mut u8
 
                     out.cast::<u32>()
                         .write_unaligned(cursor.offset_from_unsigned(comment_start) as u32);
-
                     out = out.add(4);
                 }
             }

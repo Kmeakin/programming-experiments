@@ -1,4 +1,4 @@
-use crate::{TokenKind, utils::first_set};
+use crate::TokenKind;
 use std::{ops::Range, simd::prelude::*};
 
 type LexFn<F> = extern "rust-preserve-none" fn(&JumpTable<F>, F, *const u8, *const u8);
@@ -226,7 +226,7 @@ fn eat_line_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let mask = vec.simd_eq(Simd::splat(b'\n'));
-            if let Some(off) = first_set(mask) {
+            if let Some(off) = mask.first_set() {
                 return cur.add(off);
             }
             cur = cur.add(VEC_LEN);
@@ -244,7 +244,7 @@ fn eat_block_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let mask = vec.simd_eq(Simd::splat(b'/'));
-            if let Some(off) = first_set(mask) {
+            if let Some(off) = mask.first_set() {
                 let slash_ptr = cur.add(off);
                 let prev_byte = slash_ptr.sub(1).read();
                 let next_byte = slash_ptr.add(1).read();
@@ -365,7 +365,7 @@ fn eat_double_quote_string(mut cur: *const u8, src_end: *const u8) -> *const u8 
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            if let Some(off) = first_set(quote_mask) {
+            if let Some(off) = quote_mask.first_set() {
                 cur = cur.add(off).add(1);
                 let mut backslashes = 0;
                 let mut cur_back = cur.sub(2);
@@ -393,7 +393,7 @@ fn eat_raw_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            if let Some(off) = first_set(quote_mask) {
+            if let Some(off) = quote_mask.first_set() {
                 return cur.add(off).add(1);
             }
 
@@ -421,7 +421,7 @@ fn eat_hash_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
             let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            if let Some(off) = first_set(quote_mask) {
+            if let Some(off) = quote_mask.first_set() {
                 cur = cur.add(off).add(1);
                 let mut num_hashes = num_hashes;
                 while cur.read() == b'#' {
@@ -454,7 +454,7 @@ fn eat_ident(mut cur: *const u8) -> *const u8 {
                 | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
                 | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')));
 
-            if let Some(off) = first_set(!mask) {
+            if let Some(off) = (!mask).first_set() {
                 return cur.add(off);
             }
 
@@ -470,7 +470,7 @@ fn eat_decimal(mut cur: *const u8) -> *const u8 {
             let mask = (vec.simd_eq(Simd::splat(b'_')))
                 | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')));
 
-            if let Some(off) = first_set(!mask) {
+            if let Some(off) = (!mask).first_set() {
                 return cur.add(off);
             }
 
