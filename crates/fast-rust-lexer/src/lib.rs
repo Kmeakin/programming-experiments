@@ -1,6 +1,12 @@
-#![feature(explicit_tail_calls, portable_simd, rust_preserve_none_cc, bstr)]
-#![cfg_attr(test, feature(slice_from_ptr_range))]
-#![allow(incomplete_features)]
+#![feature(
+    explicit_tail_calls,
+    portable_simd,
+    rust_preserve_none_cc,
+    simd_ffi,
+    link_llvm_intrinsics
+)]
+#![cfg_attr(test, feature(slice_from_ptr_range, bstr))]
+#![allow(incomplete_features, internal_features)]
 
 pub mod impls;
 pub mod utils;

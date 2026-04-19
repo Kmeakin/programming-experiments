@@ -1,4 +1,4 @@
-use std::hint::black_box;
+use std::{hint::black_box, ptr};
 
 use criterion::{Criterion, Throughput};
 use fast_rust_lexer::{multi_pass, raw_ptr, utils::push_unchecked};
@@ -367,14 +367,21 @@ fn check_unicode(c: &mut Criterion) {
 }
 
 fn memcpy(c: &mut Criterion) {
-    let input = get_input();
+    let mut input = get_input();
 
     let mut group = c.benchmark_group("memcpy");
     group.throughput(Throughput::Bytes(input.len() as u64));
-    group.bench_function("string_clone", |b| {
+    group.bench_function("to_ascii_uppercase", |b| {
         b.iter(|| {
-            let output = input.clone();
-            black_box(output)
+            input.make_ascii_lowercase();
+        });
+    });
+
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("string_clone", |b| {
+        let mut output = input.clone();
+        b.iter(|| {
+            unsafe { ptr::copy_nonoverlapping(input.as_ptr(), output.as_mut_ptr(), input.len()) };
         });
     });
 
@@ -384,15 +391,52 @@ fn memcpy(c: &mut Criterion) {
 fn multi_pass(c: &mut Criterion) {
     let input = get_input();
     let mut input = input.into_bytes();
-    input.extend([multi_pass::EOF_BYTE; multi_pass::EOF_PADDING]);
+    input.extend([multi_pass::EOF_BYTE; 128]);
     let input = input.as_slice();
 
     let mut group = c.benchmark_group("multi_pass");
+
     group.throughput(Throughput::Bytes(input.len() as u64));
-    group.bench_function("line_comments", |b| {
+    group.bench_function("line_comment_starts::<16>", |b| {
+        let mut output = vec![0; input.len()];
+        b.iter(|| unsafe { multi_pass::line_comment_starts::<16>(input, output.as_mut_ptr()) });
+    });
+
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("line_comment_starts::<32>", |b| {
+        let mut output = vec![0; input.len()];
+        b.iter(|| unsafe { multi_pass::line_comment_starts::<32>(input, output.as_mut_ptr()) });
+    });
+
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("line_comment_starts::<64>", |b| {
+        let mut output = vec![0; input.len()];
+        b.iter(|| unsafe { multi_pass::line_comment_starts::<64>(input, output.as_mut_ptr()) });
+    });
+
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("line_comments::<16>", |b| {
         let mut output = vec![multi_pass::EOF_BYTE; input.len()];
         b.iter(|| unsafe {
-            let output = multi_pass::line_comments(input, output.as_mut_ptr());
+            let output = multi_pass::line_comments::<16>(input, output.as_mut_ptr());
+            black_box(output)
+        });
+    });
+
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("line_comments::<32>", |b| {
+        let mut output = vec![multi_pass::EOF_BYTE; input.len()];
+        b.iter(|| unsafe {
+            let output = multi_pass::line_comments::<32>(input, output.as_mut_ptr());
+            black_box(output)
+        });
+    });
+
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function("line_comments::<64>", |b| {
+        let mut output = vec![multi_pass::EOF_BYTE; input.len()];
+        b.iter(|| unsafe {
+            let output = multi_pass::line_comments::<64>(input, output.as_mut_ptr());
             black_box(output)
         });
     });

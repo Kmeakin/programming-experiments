@@ -11,6 +11,7 @@ rustdoc.all                = { level = "warn", priority = -1 }
 
 clippy.cast_possible_truncation = { level = "allow" }
 clippy.cast_precision_loss      = { level = "allow" }
+clippy.match_bool               = { level = "allow" }
 clippy.missing_const_for_fn     = { level = "allow" }
 clippy.missing_errors_doc       = { level = "allow" }
 clippy.missing_panics_doc       = { level = "allow" }
