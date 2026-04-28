@@ -3,9 +3,11 @@
     portable_simd,
     rust_preserve_none_cc,
     simd_ffi,
-    link_llvm_intrinsics
+    link_llvm_intrinsics,
+    bstr,
+    iter_next_chunk,
+    slice_from_ptr_range
 )]
-#![cfg_attr(test, feature(slice_from_ptr_range, bstr))]
 #![allow(incomplete_features, internal_features)]
 
 pub mod impls;

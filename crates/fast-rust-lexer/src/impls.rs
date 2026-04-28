@@ -5,7 +5,8 @@ pub mod manual_loop;
 pub mod multi_pass;
 pub mod raw_ptr;
 pub mod rustc;
-#[cfg(false)]
 pub mod simd;
+#[cfg(false)]
+pub mod simd2;
 #[cfg(false)]
 pub mod wip;

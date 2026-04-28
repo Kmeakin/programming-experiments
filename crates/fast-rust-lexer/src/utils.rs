@@ -1,3 +1,4 @@
+pub mod bitstring;
 pub mod simdx;
 pub mod tbl;
 

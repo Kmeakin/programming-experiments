@@ -1,4 +1,4 @@
-use crate::{TokenKind, raw_ptr};
+use crate::{TokenKind, raw_ptr, simd};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -47,13 +47,50 @@ fn lex_raw_ptr(input: &str) -> Vec<(TokenKind, u32)> {
     tokens
 }
 
+fn lex_simd<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
+    debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
+    let mut input = input.as_bytes().to_vec();
+    input.extend([simd::EOF_BYTE; VEC_LEN]);
+    input.extend([simd::EOF_BYTE; VEC_LEN]);
+    let mut out_vec = vec![simd::EOF_BYTE; input.len() * 5];
+    let out = simd::lex::<VEC_LEN>(&input, &mut out_vec);
+
+    let mut tokens = Vec::new();
+    let mut iter = out.iter().copied();
+    while let Some(byte) = iter.next() {
+        if byte == simd::EOF_BYTE {
+            break;
+        }
+        let Some(kind) = simd::TokenKind::from_u8(byte) else {
+            panic!("Invalid token kind byte: {byte} ({byte:#04x})");
+        };
+        let len = match kind.is_punct() {
+            true => 1,
+            false => u32::from_ne_bytes(iter.next_chunk().expect("Expected length byte")),
+        };
+        tokens.push((TokenKind::from(kind), len));
+    }
+    tokens
+}
+
 #[track_caller]
 fn check(impl_fn: impl Fn(&str) -> Vec<(TokenKind, u32)>) {
     let input = std::fs::read_to_string(format!("{CRATE_ROOT}/test-data/rustc.rs")).unwrap();
     let rustc_tokens = lex_rustc(&input);
     let impl_tokens = impl_fn(&input);
+    let mut pos = 0;
     for (rustc_token, impl_token) in rustc_tokens.iter().zip(impl_tokens.iter()) {
-        assert_eq!(rustc_token, impl_token);
+        let start = pos;
+        let end = pos + rustc_token.1 as usize;
+        let rustc_lexeme = &input[start..end];
+        let impl_lexeme = &input[start..start + impl_token.1 as usize];
+        assert_eq!(
+            rustc_token, impl_token,
+            "Token mismatch at byte position {start}: expected {:?} (lexeme: {:?}), got {:?} \
+             (lexeme: {:?})",
+            rustc_token.0, rustc_lexeme, impl_token.0, impl_lexeme
+        );
+        pos = end;
     }
     assert_eq!(rustc_tokens.len(), impl_tokens.len());
 }
@@ -72,3 +109,12 @@ fn test_jump_threading() { check(lex_jump_threading); }
 
 #[test]
 fn test_raw_ptr() { check(lex_raw_ptr); }
+
+#[test]
+fn test_simd_16() { check(lex_simd::<16>); }
+
+#[test]
+fn test_simd_32() { check(lex_simd::<32>); }
+
+#[test]
+fn test_simd_64() { check(lex_simd::<64>); }
