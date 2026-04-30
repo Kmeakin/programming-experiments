@@ -283,18 +283,18 @@ fn jump_threading(c: &mut Criterion) {
     group.finish();
 }
 
-fn raw_ptr(c: &mut Criterion) {
+fn raw_ptr<const VEC_LEN: usize>(c: &mut Criterion) {
     let input = get_input();
     let mut input = input.into_bytes();
-    input.extend([raw_ptr::EOF_BYTE; raw_ptr::EOF_PADDING]);
+    input.extend([raw_ptr::EOF_BYTE; VEC_LEN]);
     let input = input.as_slice();
 
-    let mut group = c.benchmark_group("raw_ptr");
+    let mut group = c.benchmark_group(format!("raw_ptr::<{}>", VEC_LEN));
     group.throughput(Throughput::Bytes(input.len() as u64));
     group.bench_function("count", |b| {
         b.iter(|| {
             let mut count = 0;
-            raw_ptr::lex_loop(input, |_, _, _| {
+            raw_ptr::lex_loop::<VEC_LEN, _>(input, |_, _, _| {
                 count += 1;
             });
             black_box(count)
@@ -304,7 +304,7 @@ fn raw_ptr(c: &mut Criterion) {
     group.bench_function("collect", |b| {
         b.iter(|| {
             let mut output = Vec::new();
-            raw_ptr::lex_loop(input, |kind, start, end| {
+            raw_ptr::lex_loop::<VEC_LEN, _>(input, |kind, start, end| {
                 let len = unsafe { end.offset_from_unsigned(start) };
                 output.push((kind, len));
             });
@@ -315,7 +315,7 @@ fn raw_ptr(c: &mut Criterion) {
     group.bench_function("collect_preallocated", |b| {
         b.iter(|| {
             let mut output = Vec::with_capacity(input.len());
-            raw_ptr::lex_loop(input, |kind, start, end| {
+            raw_ptr::lex_loop::<VEC_LEN, _>(input, |kind, start, end| {
                 let len = unsafe { end.offset_from_unsigned(start) };
                 output.push((kind, len));
             });
@@ -326,7 +326,7 @@ fn raw_ptr(c: &mut Criterion) {
     group.bench_function("push_unchecked", |b| {
         b.iter(|| {
             let mut output = Vec::with_capacity(input.len());
-            raw_ptr::lex_loop(input, |kind, start, end| unsafe {
+            raw_ptr::lex_loop::<VEC_LEN, _>(input, |kind, start, end| unsafe {
                 let len = end.offset_from_unsigned(start);
                 push_unchecked(&mut output, (kind, len));
             });
@@ -338,7 +338,7 @@ fn raw_ptr(c: &mut Criterion) {
         b.iter(|| {
             let mut output = Vec::with_capacity(input.len());
             let mut ptr: *mut (_, _) = output.as_mut_ptr();
-            raw_ptr::lex_loop(input, move |kind, start, end| unsafe {
+            raw_ptr::lex_loop::<VEC_LEN, _>(input, move |kind, start, end| unsafe {
                 let len = end.offset_from_unsigned(start);
                 ptr.write((kind, len));
                 ptr = ptr.add(1);
@@ -519,7 +519,9 @@ fn main() {
     manual(&mut criterion);
     manual_loop(&mut criterion);
     jump_threading(&mut criterion);
-    raw_ptr(&mut criterion);
+    raw_ptr::<16>(&mut criterion);
+    raw_ptr::<32>(&mut criterion);
+    raw_ptr::<64>(&mut criterion);
     multi_pass(&mut criterion);
     simd(&mut criterion);
     Criterion::default().configure_from_args().final_summary();

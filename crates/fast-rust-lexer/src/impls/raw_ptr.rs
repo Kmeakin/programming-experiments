@@ -1,36 +1,30 @@
-use crate::TokenKind;
-use std::{ops::Range, simd::prelude::*};
+use std::ops::Range;
+use std::simd::prelude::*;
 
-type LexFn<F> = extern "rust-preserve-none" fn(&JumpTable<F>, F, *const u8, *const u8);
+use crate::TokenKind;
+
+type LexFn<const VEC_LEN: usize, F> =
+    extern "rust-preserve-none" fn(&JumpTable<VEC_LEN, F>, F, *const u8, *const u8);
 
 pub const EOF_BYTE: u8 = 0xff;
-pub const VEC_LEN: usize = 16;
-pub const EOF_PADDING: usize = VEC_LEN;
 
-pub fn lex_loop<F: FnMut(TokenKind, *const u8, *const u8)>(src: &[u8], on_token: F) {
-    debug_assert!(src.ends_with(&[EOF_BYTE; EOF_PADDING]));
-    let table = const { &JumpTable::new() };
+pub fn lex_loop<const VEC_LEN: usize, F: FnMut(TokenKind, *const u8, *const u8)>(
+    src: &[u8],
+    on_token: F,
+) {
+    debug_assert!(src.ends_with(&[EOF_BYTE; VEC_LEN]));
+    let table = const { &JumpTable::<VEC_LEN, F>::new() };
     let Range {
         start: src_start,
         end: src_end,
     } = src.as_ptr_range();
     let byte0 = unsafe { src_start.read() };
-    let src_end = unsafe { src_end.sub(EOF_PADDING) };
+    let src_end = unsafe { src_end.sub(VEC_LEN) };
     table.fns[byte0 as usize](table, on_token, src_start, src_end);
 }
 
-pub fn hash_lengths(src: &str) -> usize {
-    let mut hash = 0usize;
-    lex_loop(src.as_bytes(), |kind, start, end| {
-        let len = unsafe { end.offset_from_unsigned(start) };
-        hash ^= len;
-        hash ^= kind as usize;
-    });
-    hash
-}
-
-struct JumpTable<F> {
-    fns: [LexFn<F>; 256],
+struct JumpTable<const VEC_LEN: usize, F> {
+    fns: [LexFn<VEC_LEN, F>; 256],
 }
 
 #[rustfmt::skip]
@@ -38,7 +32,7 @@ macro_rules! def_wrapper {
     ($name:ident) => {
         extern "rust-preserve-none"
         fn $name(&self, mut on_token: F, token_start: *const u8, src_end: *const u8) {
-            let (kind, token_end) = $name(token_start, src_end);
+            let (kind, token_end) = $name::<VEC_LEN>(token_start, src_end);
             on_token(kind, token_start, token_end);
             let next_token_start = token_end;
             let byte0 = unsafe { next_token_start.read() };
@@ -47,10 +41,10 @@ macro_rules! def_wrapper {
     };
 }
 
-impl<F: FnMut(TokenKind, *const u8, *const u8)> JumpTable<F> {
+impl<const VEC_LEN: usize, F: FnMut(TokenKind, *const u8, *const u8)> JumpTable<VEC_LEN, F> {
     const fn new() -> Self {
         const {
-            let mut fns: [LexFn<F>; 256] = [Self::unknown as LexFn<F>; 256];
+            let mut fns: [LexFn<VEC_LEN, F>; 256] = [Self::unknown as LexFn<VEC_LEN, F>; 256];
             let mut i = 0;
             while i < 256 {
                 fns[i] = match i as u8 {
@@ -159,7 +153,7 @@ impl<F: FnMut(TokenKind, *const u8, *const u8)> JumpTable<F> {
 #[rustfmt::skip]
 macro_rules! def_punctuation {
     ($name:ident, $kind:ident) => {
-        fn $name(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+        fn $name<const VEC_LEN: usize>(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
             (TokenKind::$kind, unsafe { token_start.add(1) })
         }
     };
@@ -193,7 +187,10 @@ def_punctuation!(lt, Lt);
 def_punctuation!(caret, Caret);
 
 #[inline]
-fn whitespace(mut cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+fn whitespace<const VEC_LEN: usize>(
+    mut cur: *const u8,
+    _src_end: *const u8,
+) -> (TokenKind, *const u8) {
     unsafe {
         cur = cur.add(1);
         while let b' ' | b'\t' | b'\n' = cur.read() {
@@ -204,24 +201,27 @@ fn whitespace(mut cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8)
 }
 
 #[inline]
-fn slash_or_comment(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+fn slash_or_comment<const VEC_LEN: usize>(
+    cur: *const u8,
+    src_end: *const u8,
+) -> (TokenKind, *const u8) {
     unsafe {
         let byte1 = cur.add(1).read();
         match byte1 {
             b'/' => (
                 TokenKind::LineComment,
-                eat_line_comment(cur.add(2), src_end),
+                eat_line_comment::<VEC_LEN>(cur.add(2), src_end),
             ),
             b'*' => (
                 TokenKind::BlockComment,
-                eat_block_comment(cur.add(2), src_end),
+                eat_block_comment::<VEC_LEN>(cur.add(2), src_end),
             ),
             _ => (TokenKind::Slash, cur.add(1)),
         }
     }
 }
 #[inline]
-fn eat_line_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_line_comment<const VEC_LEN: usize>(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
@@ -237,7 +237,7 @@ fn eat_line_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     }
 }
 #[inline]
-fn eat_block_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_block_comment<const VEC_LEN: usize>(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         let mut depth = 1usize;
         let first_star_ptr = cur.sub(1);
@@ -273,11 +273,14 @@ fn eat_block_comment(mut cur: *const u8, src_end: *const u8) -> *const u8 {
 }
 
 #[inline]
-fn char_or_lifetime(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+fn char_or_lifetime<const VEC_LEN: usize>(
+    cur: *const u8,
+    src_end: *const u8,
+) -> (TokenKind, *const u8) {
     unsafe {
         let mut cur = cur.add(1);
         if let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = cur.read() {
-            cur = eat_ident(cur);
+            cur = eat_ident::<VEC_LEN>(cur);
             match cur.read() {
                 b'\'' => return (TokenKind::Char, cur.add(1)),
                 _ => return (TokenKind::Lifetime, cur),
@@ -285,64 +288,122 @@ fn char_or_lifetime(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8
         }
     }
 
-    (TokenKind::Char, eat_single_quote_string(cur, src_end))
+    (
+        TokenKind::Char,
+        eat_single_quote_string::<VEC_LEN>(cur, src_end),
+    )
 }
 #[inline]
-fn string(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
-    (TokenKind::Str, eat_double_quote_string(cur, src_end))
+fn string<const VEC_LEN: usize>(cur: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+    (
+        TokenKind::Str,
+        eat_double_quote_string::<VEC_LEN>(cur, src_end),
+    )
 }
 #[inline]
-fn b_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+fn b_string_or_ident<const VEC_LEN: usize>(
+    token_start: *const u8,
+    src_end: *const u8,
+) -> (TokenKind, *const u8) {
     unsafe {
         let cur = token_start.add(1);
         match cur.read() {
-            b'\'' => return (TokenKind::Byte, eat_single_quote_string(cur, src_end)),
-            b'\"' => return (TokenKind::ByteStr, eat_double_quote_string(cur, src_end)),
+            b'\'' => {
+                return (
+                    TokenKind::Byte,
+                    eat_single_quote_string::<VEC_LEN>(cur, src_end),
+                );
+            }
+            b'\"' => {
+                return (
+                    TokenKind::ByteStr,
+                    eat_double_quote_string::<VEC_LEN>(cur, src_end),
+                );
+            }
             b'r' => match cur.add(1).read() {
-                b'\"' => return (TokenKind::RawByteStr, eat_raw_string(cur.add(1), src_end)),
-                b'#' => return (TokenKind::RawByteStr, eat_hash_string(cur.add(2), src_end)),
+                b'\"' => {
+                    return (
+                        TokenKind::RawByteStr,
+                        eat_raw_string::<VEC_LEN>(cur.add(1), src_end),
+                    );
+                }
+                b'#' => {
+                    return (
+                        TokenKind::RawByteStr,
+                        eat_hash_string::<VEC_LEN>(cur.add(2), src_end),
+                    );
+                }
                 _ => {}
             },
             _ => {}
         }
-        (TokenKind::Ident, eat_ident(token_start))
+        (TokenKind::Ident, eat_ident::<VEC_LEN>(token_start))
     }
 }
 #[inline]
-fn c_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+fn c_string_or_ident<const VEC_LEN: usize>(
+    token_start: *const u8,
+    src_end: *const u8,
+) -> (TokenKind, *const u8) {
     unsafe {
         let cur = token_start.add(1);
         match cur.read() {
-            b'\"' => return (TokenKind::CStr, eat_double_quote_string(cur, src_end)),
+            b'\"' => {
+                return (
+                    TokenKind::CStr,
+                    eat_double_quote_string::<VEC_LEN>(cur, src_end),
+                );
+            }
             b'r' => match cur.add(1).read() {
-                b'\"' => return (TokenKind::RawCStr, eat_raw_string(cur.add(1), src_end)),
-                b'#' => return (TokenKind::RawCStr, eat_hash_string(cur.add(2), src_end)),
+                b'\"' => {
+                    return (
+                        TokenKind::RawCStr,
+                        eat_raw_string::<VEC_LEN>(cur.add(1), src_end),
+                    );
+                }
+                b'#' => {
+                    return (
+                        TokenKind::RawCStr,
+                        eat_hash_string::<VEC_LEN>(cur.add(2), src_end),
+                    );
+                }
                 _ => {}
             },
             _ => {}
         }
-        (TokenKind::Ident, eat_ident(token_start))
+        (TokenKind::Ident, eat_ident::<VEC_LEN>(token_start))
     }
 }
 #[inline]
-fn r_string_or_ident(token_start: *const u8, src_end: *const u8) -> (TokenKind, *const u8) {
+fn r_string_or_ident<const VEC_LEN: usize>(
+    token_start: *const u8,
+    src_end: *const u8,
+) -> (TokenKind, *const u8) {
     unsafe {
         let cur = token_start.add(1);
         match cur.read() {
-            b'\"' => return (TokenKind::RawStr, eat_raw_string(cur, src_end)),
+            b'\"' => return (TokenKind::RawStr, eat_raw_string::<VEC_LEN>(cur, src_end)),
             b'#' => match cur.add(1).read() {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                    return (TokenKind::RawIdent, eat_ident(cur.add(2)));
+                    return (TokenKind::RawIdent, eat_ident::<VEC_LEN>(cur.add(2)));
                 }
-                _ => return (TokenKind::RawStr, eat_hash_string(cur.add(1), src_end)),
+                _ => {
+                    return (
+                        TokenKind::RawStr,
+                        eat_hash_string::<VEC_LEN>(cur.add(1), src_end),
+                    );
+                }
             },
             _ => {}
         }
-        (TokenKind::Ident, eat_ident(token_start))
+        (TokenKind::Ident, eat_ident::<VEC_LEN>(token_start))
     }
 }
 #[inline]
-fn eat_single_quote_string(token_start: *const u8, _src_end: *const u8) -> *const u8 {
+fn eat_single_quote_string<const VEC_LEN: usize>(
+    token_start: *const u8,
+    _src_end: *const u8,
+) -> *const u8 {
     unsafe {
         let mut cur = token_start.add(1);
         loop {
@@ -359,7 +420,10 @@ fn eat_single_quote_string(token_start: *const u8, _src_end: *const u8) -> *cons
     }
 }
 #[inline]
-fn eat_double_quote_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_double_quote_string<const VEC_LEN: usize>(
+    mut cur: *const u8,
+    src_end: *const u8,
+) -> *const u8 {
     unsafe {
         cur = cur.add(1);
         loop {
@@ -387,7 +451,7 @@ fn eat_double_quote_string(mut cur: *const u8, src_end: *const u8) -> *const u8 
     }
 }
 #[inline]
-fn eat_raw_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_raw_string<const VEC_LEN: usize>(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         cur = cur.add(1);
         loop {
@@ -405,7 +469,7 @@ fn eat_raw_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     }
 }
 #[inline]
-fn eat_hash_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_hash_string<const VEC_LEN: usize>(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         let mut num_hashes = 1;
         while cur.read() == b'#' {
@@ -441,11 +505,14 @@ fn eat_hash_string(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     }
 }
 #[inline]
-fn ident(token_start: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
-    (TokenKind::Ident, eat_ident(token_start))
+fn ident<const VEC_LEN: usize>(
+    token_start: *const u8,
+    _src_end: *const u8,
+) -> (TokenKind, *const u8) {
+    (TokenKind::Ident, eat_ident::<VEC_LEN>(token_start))
 }
 #[inline]
-fn eat_ident(mut cur: *const u8) -> *const u8 {
+fn eat_ident<const VEC_LEN: usize>(mut cur: *const u8) -> *const u8 {
     unsafe {
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
@@ -463,7 +530,7 @@ fn eat_ident(mut cur: *const u8) -> *const u8 {
     }
 }
 #[inline]
-fn eat_decimal(mut cur: *const u8) -> *const u8 {
+fn eat_decimal<const VEC_LEN: usize>(mut cur: *const u8) -> *const u8 {
     unsafe {
         loop {
             let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
@@ -479,8 +546,8 @@ fn eat_decimal(mut cur: *const u8) -> *const u8 {
     }
 }
 #[inline]
-fn number(cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
-    let mut cur = eat_decimal(cur);
+fn number<const VEC_LEN: usize>(cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
+    let mut cur = eat_decimal::<VEC_LEN>(cur);
 
     unsafe {
         let mut kind = match cur.read() {
@@ -488,7 +555,7 @@ fn number(cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
                 b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_' => TokenKind::Int,
                 _ => {
                     cur = cur.add(1);
-                    cur = eat_decimal(cur);
+                    cur = eat_decimal::<VEC_LEN>(cur);
                     TokenKind::Float
                 }
             },
@@ -504,26 +571,29 @@ fn number(cur: *const u8, _src_end: *const u8) -> (TokenKind, *const u8) {
             }
         }
 
-        (kind, eat_ident(cur))
+        (kind, eat_ident::<VEC_LEN>(cur))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use expect_test::Expect;
-    use expect_test::expect;
     use std::fmt::Write as _;
+
+    use expect_test::{Expect, expect};
+
+    use super::*;
+
+    const VEC_LEN: usize = 16;
 
     #[track_caller]
     fn check(source: &str, expected: &Expect) {
         // Prepare the input
         let mut input = source.as_bytes().to_vec();
-        input.extend_from_slice(&[EOF_BYTE; EOF_PADDING]);
+        input.extend_from_slice(&[EOF_BYTE; VEC_LEN]);
         let input_start = input.as_ptr();
 
         let mut output = String::new();
-        lex_loop(&input, |kind, start, end| {
+        lex_loop::<VEC_LEN, _>(&input, |kind, start, end| {
             let start_pos = unsafe { start.offset_from_unsigned(input_start) };
             let end_pos = unsafe { end.offset_from_unsigned(input_start) };
             let span = start_pos..end_pos;

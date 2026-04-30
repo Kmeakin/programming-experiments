@@ -35,12 +35,12 @@ fn lex_jump_threading(input: &str) -> Vec<(TokenKind, u32)> {
     tokens
 }
 
-fn lex_raw_ptr(input: &str) -> Vec<(TokenKind, u32)> {
+fn lex_raw_ptr<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
     debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
     let mut input = input.as_bytes().to_vec();
-    input.extend([raw_ptr::EOF_BYTE; raw_ptr::EOF_PADDING]);
+    input.extend([raw_ptr::EOF_BYTE; VEC_LEN]);
     let mut tokens = Vec::new();
-    raw_ptr::lex_loop(&input, |kind, start, end| {
+    raw_ptr::lex_loop::<VEC_LEN, _>(&input, |kind, start, end| {
         let len = unsafe { end.offset_from_unsigned(start) };
         tokens.push((kind, len as u32));
     });
@@ -108,7 +108,13 @@ fn test_manual_loop() { check(lex_manual_loop); }
 fn test_jump_threading() { check(lex_jump_threading); }
 
 #[test]
-fn test_raw_ptr() { check(lex_raw_ptr); }
+fn test_raw_ptr_16() { check(lex_raw_ptr::<16>); }
+
+#[test]
+fn test_raw_ptr_32() { check(lex_raw_ptr::<32>); }
+
+#[test]
+fn test_raw_ptr_64() { check(lex_raw_ptr::<64>); }
 
 #[test]
 fn test_simd_16() { check(lex_simd::<16>); }
