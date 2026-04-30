@@ -289,7 +289,7 @@ fn raw_ptr<const VEC_LEN: usize>(c: &mut Criterion) {
     input.extend([raw_ptr::EOF_BYTE; VEC_LEN]);
     let input = input.as_slice();
 
-    let mut group = c.benchmark_group(format!("raw_ptr::<{}>", VEC_LEN));
+    let mut group = c.benchmark_group(format!("raw_ptr::<{VEC_LEN}>"));
     group.throughput(Throughput::Bytes(input.len() as u64));
     group.bench_function("count", |b| {
         b.iter(|| {
