@@ -1,6 +1,7 @@
 use std::arch::aarch64::{
-    uint8x16_t, uint8x16x4_t, vandq_u8, vget_lane_u64, vgetq_lane_u16, vgetq_lane_u32, vld1q_u8,
-    vld4q_u8, vreinterpret_u64_u8, vreinterpretq_u16_u8, vreinterpretq_u32_u8, vshrn_n_u16,
+    uint8x16_t, uint8x16x2_t, uint8x16x4_t, vandq_u8, vget_lane_u64, vgetq_lane_u16,
+    vgetq_lane_u32, vgetq_lane_u64, vld4q_u8, vreinterpret_u64_u8, vreinterpretq_u16_u8,
+    vreinterpretq_u32_u8, vreinterpretq_u64_u8, vshrn_n_u16,
 };
 use std::ptr;
 use std::simd::prelude::*;
@@ -32,9 +33,10 @@ unsafe extern "C" {
 fn movemask8(mask: Mask<i8, 8>) -> u8 { mask.to_bitmask() as u8 }
 
 #[inline]
-fn movemask16(mask: &Mask<i8, 16>) -> u16 {
+fn movemask16(mask: Mask<i8, 16>) -> u16 {
     unsafe {
-        let v0 = vandq_u8(vld1q_u8(ptr::from_ref(mask).cast()), POWERS_OF_2.into());
+        let v0 = std::mem::transmute::<Mask<i8, 16>, uint8x16_t>(mask);
+        let v0 = vandq_u8(v0, POWERS_OF_2.into());
         let t0 = vpaddq_u8(v0, v0);
         let t1 = vpaddq_u8(t0, t0);
         let t2 = vpaddq_u8(t1, t1);
@@ -43,14 +45,11 @@ fn movemask16(mask: &Mask<i8, 16>) -> u16 {
 }
 
 #[inline]
-fn movemask32(mask: &Mask<i8, 32>) -> u32 {
+fn movemask32(mask: Mask<i8, 32>) -> u32 {
     unsafe {
-        let v0 = vandq_u8(vld1q_u8(ptr::from_ref(mask).cast()), POWERS_OF_2.into());
-        let v1 = vandq_u8(
-            vld1q_u8(ptr::from_ref(mask).cast::<u8>().add(16)),
-            POWERS_OF_2.into(),
-        );
-
+        let uint8x16x2_t(v0, v1) = std::mem::transmute::<Mask<i8, 32>, uint8x16x2_t>(mask);
+        let v0 = vandq_u8(v0, POWERS_OF_2.into());
+        let v1 = vandq_u8(v1, POWERS_OF_2.into());
         let t0 = vpaddq_u8(v0, v1);
         let t1 = vpaddq_u8(t0, t0);
         let t2 = vpaddq_u8(t1, t1);
@@ -59,7 +58,23 @@ fn movemask32(mask: &Mask<i8, 32>) -> u32 {
 }
 
 #[inline]
-pub fn movemask64(mask: &Mask<i8, 64>) -> u64 {
+fn movemask64(mask: Mask<i8, 64>) -> u64 {
+    unsafe {
+        let uint8x16x4_t(v0, v1, v2, v3) = std::mem::transmute::<Mask<i8, 64>, uint8x16x4_t>(mask);
+        let v0 = vandq_u8(v0, POWERS_OF_2.into());
+        let v1 = vandq_u8(v1, POWERS_OF_2.into());
+        let v2 = vandq_u8(v2, POWERS_OF_2.into());
+        let v3 = vandq_u8(v3, POWERS_OF_2.into());
+        let t0 = vpaddq_u8(v0, v1);
+        let t1 = vpaddq_u8(v2, v3);
+        let t2 = vpaddq_u8(t0, t1);
+        let t3 = vpaddq_u8(t2, t2);
+        vgetq_lane_u64(vreinterpretq_u64_u8(t3), 0)
+    }
+}
+
+#[inline]
+pub fn movemask_interleaved64(mask: &Mask<i8, 64>) -> u64 {
     unsafe {
         let uint8x16x4_t(v0, v1, v2, v3) = vld4q_u8(ptr::from_ref(mask).cast());
         let t0 = vsriq_n_u8(v1, v0, 1);
@@ -76,9 +91,9 @@ pub fn movemask64(mask: &Mask<i8, 64>) -> u64 {
 pub fn movemask<const N: usize>(mask: Mask<i8, N>) -> u64 {
     match N {
         8 => u64::from(movemask8(mask.resize::<8>(false))),
-        16 => u64::from(movemask16(&mask.resize::<16>(false))),
-        32 => u64::from(movemask32(&mask.resize::<32>(false))),
-        64 => movemask64(&mask.resize::<64>(false)),
+        16 => u64::from(movemask16(mask.resize::<16>(false))),
+        32 => u64::from(movemask32(mask.resize::<32>(false))),
+        64 => movemask64(mask.resize::<64>(false)),
         _ => panic!("Unsupported vector length"),
     }
 }
@@ -112,5 +127,13 @@ fn check_movemask64() {
     for i in 0..64 {
         let mask: Mask<i8, 64> = Mask::from_bitmask(1 << i);
         assert_eq!(movemask(mask), mask.to_bitmask());
+    }
+}
+
+#[test]
+fn check_movemask_interleaved64() {
+    for i in 0..64 {
+        let mask: Mask<i8, 64> = Mask::from_bitmask(1 << i);
+        assert_eq!(movemask_interleaved64(&mask), mask.to_bitmask());
     }
 }

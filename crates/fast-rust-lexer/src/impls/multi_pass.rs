@@ -1,7 +1,12 @@
 #![allow(warnings)]
 
-use crate::utils::{bitstring::BitString, simdx::movemask};
-use std::{bstr::ByteStr, hint::select_unpredictable as select, ptr, simd::prelude::*};
+use std::hint::select_unpredictable as select;
+use std::ops::Shl;
+use std::ptr;
+use std::simd::prelude::*;
+
+use crate::utils::bitstring::BitString;
+use crate::utils::simdx::movemask;
 
 pub const EOF_BYTE: u8 = 0xFF;
 
@@ -118,10 +123,10 @@ impl LineCommentMask {
 }
 
 struct Cursor<const VEC_LEN: usize> {
-    cur: *const u8,
-    src_end: *const u8,
-    newlines: BitString,
-    line_comments: BitString,
+    cur:           *const u8,
+    src_end:       *const u8,
+    newlines:      BitString<VEC_LEN>,
+    line_comments: BitString<VEC_LEN>,
 }
 
 impl<const VEC_LEN: usize> Cursor<VEC_LEN> {
@@ -164,38 +169,38 @@ impl<const VEC_LEN: usize> Cursor<VEC_LEN> {
 
     fn next_line_comment(&mut self) -> Option<*const u8> {
         unsafe {
-            let pos = match self.line_comments.first_set() {
-                Some(pos) => pos,
-                None => loop {
+            let pos = match self.line_comments.leading_zeros() {
+                pos if pos >= VEC_LEN => loop {
                     match self.refill() {
-                        true => match self.line_comments.first_set() {
-                            Some(pos) => break pos,
-                            None => continue,
+                        true => match self.line_comments.leading_zeros() {
+                            (pos) => break pos,
+                            pos if pos >= VEC_LEN => continue,
                         },
                         false => return None,
                     }
                 },
+                pos => pos,
             };
 
             let comment_start_ptr = self.cur.add(pos);
             debug_assert_eq!(comment_start_ptr.add(0).read(), b'/');
             debug_assert_eq!(comment_start_ptr.add(1).read(), b'/');
 
-            self.line_comments = self.line_comments.clear_upto(pos + 1);
-            self.newlines = self.newlines.clear_upto(pos + 1);
+            self.line_comments = self.line_comments.shl(pos + 1);
+            self.newlines = self.newlines.shl(pos + 1);
             Some(comment_start_ptr)
         }
     }
 
     fn next_newline(&mut self) -> Option<*const u8> {
         unsafe {
-            let pos = match self.newlines.first_set() {
-                Some(pos) => pos,
-                None => loop {
+            let pos = match self.newlines.leading_zeros() {
+                (pos) => pos,
+                pos if pos >= VEC_LEN => loop {
                     match self.refill() {
-                        true => match self.newlines.first_set() {
-                            Some(pos) => break pos,
-                            None => continue,
+                        true => match self.newlines.leading_zeros() {
+                            (pos) => break pos,
+                            pos if pos >= VEC_LEN => continue,
                         },
                         false => return None,
                     }
@@ -204,8 +209,8 @@ impl<const VEC_LEN: usize> Cursor<VEC_LEN> {
             let newline_ptr = self.cur.add(pos);
             debug_assert_eq!(newline_ptr.add(0).read(), b'\n');
 
-            self.line_comments = self.line_comments.clear_upto(pos + 1);
-            self.newlines = self.newlines.clear_upto(pos + 1);
+            self.line_comments = self.line_comments.shl(pos + 1);
+            self.newlines = self.newlines.shl(pos + 1);
             Some(newline_ptr)
         }
     }
@@ -333,8 +338,9 @@ pub unsafe fn line_comments<const VEC_LEN: usize>(input: &[u8], mut out: *mut u8
 mod tests {
     use std::bstr::ByteStr;
 
-    use super::*;
     use expect_test::{Expect, expect};
+
+    use super::*;
 
     fn check(src: &str, expect: &Expect) {
         let mut input = src.to_string().into_bytes();

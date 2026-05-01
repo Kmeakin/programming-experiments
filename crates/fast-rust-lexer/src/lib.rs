@@ -1,5 +1,4 @@
 #![feature(
-    bstr,
     explicit_tail_calls,
     link_llvm_intrinsics,
     portable_simd,
@@ -7,7 +6,7 @@
     simd_ffi,
     slice_from_ptr_range
 )]
-#![cfg_attr(test, feature(iter_next_chunk))]
+#![cfg_attr(test, feature(iter_next_chunk, bstr))]
 #![allow(incomplete_features, internal_features)]
 
 pub mod impls;

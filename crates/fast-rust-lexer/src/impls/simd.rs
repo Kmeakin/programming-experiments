@@ -1,9 +1,9 @@
 use core::slice;
 use std::fmt;
 use std::marker::PhantomData;
-use std::ops::{Shl, ShlAssign};
 use std::simd::prelude::*;
 
+use crate::utils::bitstring::BitString;
 use crate::utils::simdx::{eq, in_range, movemask};
 use crate::utils::write_and_advance;
 
@@ -257,43 +257,6 @@ impl TokenKind {
                 | Self::Backquote
         )
     }
-}
-
-#[derive(Copy, Clone)]
-struct BitString<const N: usize> {
-    bits: u64,
-}
-
-impl<const BITS: usize> BitString<BITS> {
-    pub fn new(bits: u64) -> Self { Self { bits } }
-    pub fn leading_zeros(self) -> usize { Ord::min(self.bits.leading_zeros() as usize, BITS) }
-    pub fn leading_ones(self) -> usize { Ord::min(self.bits.leading_ones() as usize, BITS) }
-    fn any(self) -> bool { self.leading_ones() > 0 }
-}
-
-impl<const BITS: usize> fmt::Debug for BitString<BITS> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match BITS {
-            16 => write!(f, "{:0BITS$b}", (self.bits >> 48) as u16),
-            32 => write!(f, "{:0BITS$b}", (self.bits >> 32) as u32),
-            64 => write!(f, "{:0BITS$b}", self.bits),
-            _ => unreachable!(),
-        }
-    }
-}
-
-impl<const BITS: usize> Shl<usize> for BitString<BITS> {
-    type Output = Self;
-    fn shl(self, amount: usize) -> Self::Output {
-        debug_assert!(amount <= BITS, "amount = {amount}, BITS = {BITS}");
-        Self {
-            bits: self.bits.unbounded_shl(amount as u32),
-        }
-    }
-}
-
-impl<const BITS: usize> ShlAssign<usize> for BitString<BITS> {
-    fn shl_assign(&mut self, amount: usize) { *self = *self << amount; }
 }
 
 #[derive(Copy, Clone)]
