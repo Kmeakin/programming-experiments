@@ -1,8 +1,8 @@
 use core::slice;
+use std::fmt;
 use std::marker::PhantomData;
 use std::ops::{Shl, ShlAssign};
 use std::simd::prelude::*;
-use std::{debug_assert_matches, fmt};
 
 use crate::utils::simdx::{eq, in_range, movemask};
 use crate::utils::write_and_advance;
@@ -594,403 +594,314 @@ pub fn lex<'out, const VEC_LEN: usize>(src: &[u8], out: &'out mut [u8]) -> &'out
 
 fn lex_loop<const VEC_LEN: usize>(cursor: &mut Cursor<'_, VEC_LEN>, mut out: *mut u8) -> *mut u8 {
     unsafe {
-        let mut token_start = cursor.ptr();
-        if cursor.chunk.whitespace.any() {
-            while cursor.chunk.eat_leading_whitespace() {
-                cursor.chunk = cursor.next_chunk_unchecked();
+        'outer: loop {
+            let mut token_start = cursor.ptr();
+            if cursor.chunk.whitespace.any() {
+                while cursor.chunk.eat_leading_whitespace() {
+                    cursor.chunk = cursor.next_chunk_unchecked();
+                }
+                let token_len = cursor.token_len(token_start);
+                out = write_token(out, TokenKind::Whitespace, token_len);
+                continue 'outer;
             }
-            let token_len = cursor.token_len(token_start);
-            let out = write_token(out, TokenKind::Whitespace, token_len);
-            become lex_loop(cursor, out);
-        }
 
-        if cursor.chunk.punctuation.any() {
-            while cursor.chunk.eat_leading_punctuation() {
-                cursor.chunk = cursor.next_chunk_unchecked();
+            if cursor.chunk.punctuation.any() {
+                while cursor.chunk.eat_leading_punctuation() {
+                    cursor.chunk = cursor.next_chunk_unchecked();
+                }
+                let token_len = cursor.token_len(token_start);
+                token_start.copy_to_nonoverlapping(out, token_len as usize);
+                out = out.add(token_len as usize);
+                continue 'outer;
             }
-            let token_len = cursor.token_len(token_start);
-            token_start.copy_to_nonoverlapping(out, token_len as usize);
-            let out = out.add(token_len as usize);
-            become lex_loop(cursor, out);
-        }
 
-        if cursor.chunk.digits.any() {
-            while cursor.chunk.eat_leading_digits() {
-                cursor.chunk = cursor.next_chunk_unchecked();
-            }
-            let mut kind = match (cursor.ptr().read(), cursor.ptr().add(1).read()) {
-                (b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => TokenKind::Int,
-                (b'.', _) => {
-                    cursor.chunk.advance(1);
-                    cursor.refill_if_needed();
+            if cursor.chunk.digits.any() {
+                while cursor.chunk.eat_leading_digits() {
+                    cursor.chunk = cursor.next_chunk_unchecked();
+                }
+                let mut kind = match (cursor.ptr().read(), cursor.ptr().add(1).read()) {
+                    (b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => TokenKind::Int,
+                    (b'.', _) => {
+                        cursor.chunk.advance(1);
+                        cursor.refill_if_needed();
 
-                    // TODO: underscores too
-                    while cursor.chunk.eat_leading_digits() {
-                        cursor.chunk = cursor.next_chunk_unchecked();
+                        // TODO: underscores too
+                        while cursor.chunk.eat_leading_digits() {
+                            cursor.chunk = cursor.next_chunk_unchecked();
+                        }
+                        TokenKind::Float
                     }
-                    TokenKind::Float
-                }
-                _ => TokenKind::Int,
-            };
-
-            if let b'e' | b'E' = cursor.ptr().read() {
-                kind = TokenKind::Float;
-                cursor.chunk.advance(1);
-                cursor.refill_if_needed();
-
-                if let b'+' | b'-' = cursor.ptr().read() {
-                    cursor.chunk.advance(1);
-                    cursor.refill_if_needed();
-                }
-            }
-
-            while cursor.chunk.eat_leading_ident() {
-                cursor.chunk = cursor.next_chunk_unchecked();
-            }
-            let token_len = cursor.token_len(token_start);
-            let out = write_token(out, kind, token_len);
-            become lex_loop(cursor, out);
-        }
-
-        if cursor.chunk.ident.any() {
-            while cursor.chunk.eat_leading_ident() {
-                cursor.chunk = cursor.next_chunk_unchecked();
-            }
-            let token_len = cursor.token_len(token_start);
-            let out = write_token(out, TokenKind::Ident, token_len);
-            become lex_loop(cursor, out);
-        }
-
-        if cursor.chunk.slash_slash.any() {
-            while cursor.chunk.eat_upto_newline() {
-                let Some(next_chunk) = cursor.next_chunk() else {
-                    let token_len = cursor.token_len_eof(token_start);
-                    let out = write_token(out, TokenKind::LineComment, token_len);
-                    return out;
+                    _ => TokenKind::Int,
                 };
-                cursor.chunk = next_chunk;
-            }
-            let token_len = cursor.token_len(token_start);
-            let out = write_token(out, TokenKind::LineComment, token_len);
-            become lex_loop(cursor, out);
-        }
 
-        if cursor.chunk.slash_star.any() {
-            let mut depth = 0u32;
-            loop {
-                match cursor.chunk.next_block_comment() {
-                    Some(OpenOrClose::Close) => {
-                        depth -= 1;
-                        if depth == 0 {
-                            let token_len = cursor.token_len(token_start);
-                            let out = write_token(out, TokenKind::BlockComment, token_len);
-                            become lex_loop(cursor, out);
-                        }
-                    }
-                    Some(OpenOrClose::Open) => depth += 1,
-                    None => match cursor.next_chunk() {
-                        Some(chunk) => cursor.chunk = chunk,
-                        None => {
-                            let token_len = cursor.token_len_eof(token_start);
-                            let out = write_token(out, TokenKind::BlockComment, token_len);
-                            return out;
-                        }
-                    },
-                }
-            }
-        }
+                if let b'e' | b'E' = cursor.ptr().read() {
+                    kind = TokenKind::Float;
+                    cursor.chunk.advance(1);
+                    cursor.refill_if_needed();
 
-        if cursor.chunk.quote.any() {
-            if token_start == cursor.src_start {
-                return lex_double_quoted_string(cursor, out, token_start, TokenKind::Str);
-            }
-            return match token_start.sub(1).read() {
-                b'r' if token_start.sub(1) == cursor.src_start => {
-                    lex_raw_string(cursor, out.sub(5), token_start.sub(1), TokenKind::RawStr)
-                }
-                b'r' => match token_start.sub(2).read() {
-                    b'b' => lex_raw_string(
-                        cursor,
-                        out.sub(5),
-                        token_start.sub(2),
-                        TokenKind::RawByteStr,
-                    ),
-                    b'c' => {
-                        lex_raw_string(cursor, out.sub(5), token_start.sub(2), TokenKind::RawCStr)
-                    }
-                    _ => lex_raw_string(cursor, out.sub(5), token_start.sub(1), TokenKind::RawStr),
-                },
-                b'b' => lex_double_quoted_string(
-                    cursor,
-                    out.sub(5),
-                    token_start.sub(1),
-                    TokenKind::ByteStr,
-                ),
-                b'c' => lex_double_quoted_string(
-                    cursor,
-                    out.sub(5),
-                    token_start.sub(1),
-                    TokenKind::CStr,
-                ),
-                b'#' => {
-                    let mut num_hashes = 1;
-                    let mut p = token_start.sub(2);
-                    loop {
-                        if p.read() != b'#' {
-                            break;
-                        }
-                        num_hashes += 1;
-                        if p <= cursor.src_start {
-                            break;
-                        }
-                        p = p.sub(1);
-                    }
-
-                    let lexeme = slice::from_ptr_range(cursor.src_start..p.add(1));
-                    if lexeme.ends_with(b"br") {
-                        lex_hash_string(
-                            cursor,
-                            out.sub(5).sub(num_hashes),
-                            p.sub(1),
-                            TokenKind::RawByteStr,
-                            num_hashes,
-                        )
-                    } else if lexeme.ends_with(b"cr") {
-                        lex_hash_string(
-                            cursor,
-                            out.sub(5).sub(num_hashes),
-                            p.sub(1),
-                            TokenKind::RawCStr,
-                            num_hashes,
-                        )
-                    } else if lexeme.ends_with(b"r") {
-                        lex_hash_string(
-                            cursor,
-                            out.sub(5).sub(num_hashes),
-                            p.sub(0),
-                            TokenKind::RawStr,
-                            num_hashes,
-                        )
-                    } else {
-                        lex_hash_string(
-                            cursor,
-                            out.sub(num_hashes),
-                            p.sub(0),
-                            TokenKind::GuardedStr,
-                            num_hashes,
-                        )
+                    if let b'+' | b'-' = cursor.ptr().read() {
+                        cursor.chunk.advance(1);
+                        cursor.refill_if_needed();
                     }
                 }
-                _ => lex_double_quoted_string(cursor, out, token_start, TokenKind::Str),
-            };
-        }
 
-        if cursor.chunk.apostrophe.any() {
-            let mut kind = TokenKind::Char;
-            if token_start > cursor.src_start && token_start.sub(1).read() == b'b' {
-                kind = TokenKind::Byte;
-                token_start = token_start.sub(1);
-                out = out.sub(5);
+                while cursor.chunk.eat_leading_ident() {
+                    cursor.chunk = cursor.next_chunk_unchecked();
+                }
+                let token_len = cursor.token_len(token_start);
+                out = write_token(out, kind, token_len);
+                continue 'outer;
             }
 
-            cursor.chunk.advance(1);
-            cursor.refill_if_needed();
             if cursor.chunk.ident.any() {
                 while cursor.chunk.eat_leading_ident() {
                     cursor.chunk = cursor.next_chunk_unchecked();
                 }
-                cursor.refill_if_needed();
-                let kind = if cursor.chunk.apostrophe.any() {
-                    cursor.chunk.advance(1);
-                    kind
-                } else {
-                    TokenKind::Lifetime
-                };
-                let len = cursor.token_len(token_start);
-                let out = write_token(out, kind, len);
-                become lex_loop(cursor, out);
+                let token_len = cursor.token_len(token_start);
+                out = write_token(out, TokenKind::Ident, token_len);
+                continue 'outer;
             }
-            loop {
-                while cursor.chunk.eat_upto_apostrophe() {
+
+            if cursor.chunk.slash_slash.any() {
+                while cursor.chunk.eat_upto_newline() {
                     let Some(next_chunk) = cursor.next_chunk() else {
                         let token_len = cursor.token_len_eof(token_start);
-                        let out = write_token(out, kind, token_len);
+                        let out = write_token(out, TokenKind::LineComment, token_len);
                         return out;
                     };
                     cursor.chunk = next_chunk;
                 }
+                let token_len = cursor.token_len(token_start);
+                out = write_token(out, TokenKind::LineComment, token_len);
+                continue 'outer;
+            }
 
-                let mut end = cursor.ptr();
-                let mut num_backslashes = 0;
-                while end > token_start {
-                    end = end.sub(1);
-                    if end.read() != b'\\' {
-                        break;
+            if cursor.chunk.slash_star.any() {
+                let mut depth = 0u32;
+                loop {
+                    match cursor.chunk.next_block_comment() {
+                        Some(OpenOrClose::Open) => depth += 1,
+                        Some(OpenOrClose::Close) => {
+                            depth -= 1;
+                            if depth == 0 {
+                                let token_len = cursor.token_len(token_start);
+                                out = write_token(out, TokenKind::BlockComment, token_len);
+                                continue 'outer;
+                            }
+                        }
+                        None => match cursor.next_chunk() {
+                            Some(chunk) => cursor.chunk = chunk,
+                            None => {
+                                let token_len = cursor.token_len_eof(token_start);
+                                out = write_token(out, TokenKind::BlockComment, token_len);
+                                return out;
+                            }
+                        },
                     }
-                    num_backslashes += 1;
+                }
+            }
+
+            if cursor.chunk.quote.any() {
+                let mut kind = TokenKind::Str;
+                if token_start > cursor.src_start {
+                    match token_start.sub(1).read() {
+                        b'r' => {
+                            let kind;
+                            (out, token_start, kind) = match token_start.sub(1) == cursor.src_start
+                            {
+                                true => (out.sub(5), token_start.sub(1), TokenKind::RawStr),
+                                false => match token_start.sub(2).read() {
+                                    b'b' => (out.sub(5), token_start.sub(2), TokenKind::RawByteStr),
+                                    b'c' => (out.sub(5), token_start.sub(2), TokenKind::RawCStr),
+                                    _ => (out.sub(5), token_start.sub(1), TokenKind::RawStr),
+                                },
+                            };
+                            cursor.chunk.advance(1);
+                            cursor.refill_if_needed();
+                            while cursor.chunk.eat_upto_quote() {
+                                match cursor.next_chunk() {
+                                    Some(next_chunk) => cursor.chunk = next_chunk,
+                                    None => {
+                                        let token_len = cursor.token_len_eof(token_start);
+                                        return write_token(out, kind, token_len);
+                                    }
+                                }
+                            }
+
+                            cursor.chunk.advance(1);
+                            let token_len = cursor.token_len(token_start);
+                            out = write_token(out, kind, token_len);
+                            continue 'outer;
+                        }
+                        b'#' => {
+                            let mut num_hashes = 1;
+                            let mut p = token_start.sub(2);
+                            loop {
+                                if p.read() != b'#' {
+                                    break;
+                                }
+                                num_hashes += 1;
+                                if p <= cursor.src_start {
+                                    break;
+                                }
+                                p = p.sub(1);
+                            }
+
+                            let lexeme = slice::from_ptr_range(cursor.src_start..p.add(1));
+                            let kind;
+                            (out, token_start, kind) = if lexeme.ends_with(b"br") {
+                                (out.sub(5).sub(num_hashes), p.sub(1), TokenKind::RawByteStr)
+                            } else if lexeme.ends_with(b"cr") {
+                                (out.sub(5).sub(num_hashes), p.sub(1), TokenKind::RawCStr)
+                            } else if lexeme.ends_with(b"r") {
+                                (out.sub(5).sub(num_hashes), p.sub(0), TokenKind::RawStr)
+                            } else {
+                                (out.sub(num_hashes), p.sub(0), TokenKind::GuardedStr)
+                            };
+
+                            cursor.chunk.advance(1);
+                            cursor.refill_if_needed();
+                            loop {
+                                while cursor.chunk.eat_upto_quote() {
+                                    match cursor.next_chunk() {
+                                        Some(next_chunk) => cursor.chunk = next_chunk,
+                                        None => {
+                                            let token_len = cursor.token_len_eof(token_start);
+                                            return write_token(out, kind, token_len);
+                                        }
+                                    }
+                                }
+
+                                debug_assert_eq!(cursor.ptr().read(), b'"');
+                                cursor.chunk.advance(1);
+                                cursor.refill_if_needed();
+
+                                let mut num_remaining_hashes = num_hashes;
+                                loop {
+                                    let len = cursor.chunk.hash.leading_ones();
+                                    if len >= num_remaining_hashes {
+                                        cursor.chunk.advance(num_remaining_hashes);
+                                        let token_len = cursor.token_len(token_start);
+                                        out = write_token(out, kind, token_len);
+                                        continue 'outer;
+                                    }
+
+                                    num_remaining_hashes -= len;
+                                    if len >= cursor.chunk.remainder {
+                                        cursor.chunk = cursor.next_chunk_unchecked();
+                                    } else {
+                                        cursor.chunk.advance(len);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        b'b' => {
+                            out = out.sub(5);
+                            token_start = token_start.sub(1);
+                            kind = TokenKind::ByteStr;
+                        }
+                        b'c' => {
+                            out = out.sub(5);
+                            token_start = token_start.sub(1);
+                            kind = TokenKind::CStr;
+                        }
+                        _ => {}
+                    }
                 }
 
                 cursor.chunk.advance(1);
-                if num_backslashes % 2 == 0 {
-                    let token_len = cursor.token_len(token_start);
-                    let out = write_token(out, kind, token_len);
-                    become lex_loop(cursor, out);
-                }
-            }
-        }
+                cursor.refill_if_needed();
+                loop {
+                    while cursor.chunk.eat_upto_quote() {
+                        match cursor.next_chunk() {
+                            Some(next_chunk) => cursor.chunk = next_chunk,
+                            None => {
+                                let token_len = cursor.token_len_eof(token_start);
+                                let out = write_token(out, kind, token_len);
+                                return out;
+                            }
+                        }
+                    }
 
-        if cursor.peek() == EOF_BYTE {
-            return out;
-        }
+                    let mut num_backslashes = 0;
+                    let mut p = cursor.ptr();
+                    while p > token_start {
+                        p = p.sub(1);
+                        if p.read() != b'\\' {
+                            break;
+                        }
+                        num_backslashes += 1;
+                    }
 
-        cursor.chunk = cursor.next_chunk().unwrap();
-        become lex_loop(cursor, out);
-    }
-}
-
-fn lex_double_quoted_string<const VEC_LEN: usize>(
-    cursor: &mut Cursor<'_, VEC_LEN>,
-    out: *mut u8,
-    token_start: *const u8,
-    kind: TokenKind,
-) -> *mut u8 {
-    unsafe {
-        debug_assert_matches!(kind, TokenKind::Str | TokenKind::ByteStr | TokenKind::CStr);
-        cursor.chunk.advance(1);
-        cursor.refill_if_needed();
-        loop {
-            while cursor.chunk.eat_upto_quote() {
-                match cursor.next_chunk() {
-                    Some(next_chunk) => cursor.chunk = next_chunk,
-                    None => {
-                        let token_len = cursor.token_len_eof(token_start);
-                        let out = write_token(out, kind, token_len);
-                        return out;
+                    cursor.chunk.advance(1);
+                    if num_backslashes % 2 == 0 {
+                        let token_len = cursor.token_len(token_start);
+                        out = write_token(out, kind, token_len);
+                        continue 'outer;
                     }
                 }
             }
 
-            let mut num_backslashes = 0;
-            let mut p = cursor.ptr();
-            while p > token_start {
-                p = p.sub(1);
-                if p.read() != b'\\' {
-                    break;
+            if cursor.chunk.apostrophe.any() {
+                let mut kind = TokenKind::Char;
+                if token_start > cursor.src_start && token_start.sub(1).read() == b'b' {
+                    kind = TokenKind::Byte;
+                    token_start = token_start.sub(1);
+                    out = out.sub(5);
                 }
-                num_backslashes += 1;
-            }
 
-            cursor.chunk.advance(1);
-            if num_backslashes % 2 == 0 {
-                let token_len = cursor.token_len(token_start);
-                let out = write_token(out, kind, token_len);
-                return lex_loop(cursor, out);
-            }
-        }
-    }
-}
-
-fn lex_raw_string<const VEC_LEN: usize>(
-    cursor: &mut Cursor<'_, VEC_LEN>,
-    out: *mut u8,
-    token_start: *const u8,
-    kind: TokenKind,
-) -> *mut u8 {
-    unsafe {
-        debug_assert_matches!(
-            kind,
-            TokenKind::RawStr | TokenKind::RawByteStr | TokenKind::RawCStr
-        );
-        cursor.chunk.advance(1);
-        cursor.refill_if_needed();
-        while cursor.chunk.eat_upto_quote() {
-            match cursor.next_chunk() {
-                Some(next_chunk) => cursor.chunk = next_chunk,
-                None => {
-                    let token_len = cursor.token_len_eof(token_start);
-                    let out = write_token(out, kind, token_len);
-                    return out;
+                cursor.chunk.advance(1);
+                cursor.refill_if_needed();
+                if cursor.chunk.ident.any() {
+                    while cursor.chunk.eat_leading_ident() {
+                        cursor.chunk = cursor.next_chunk_unchecked();
+                    }
+                    cursor.refill_if_needed();
+                    let kind = if cursor.chunk.apostrophe.any() {
+                        cursor.chunk.advance(1);
+                        kind
+                    } else {
+                        TokenKind::Lifetime
+                    };
+                    let len = cursor.token_len(token_start);
+                    out = write_token(out, kind, len);
+                    continue 'outer;
                 }
-            }
-        }
+                loop {
+                    while cursor.chunk.eat_upto_apostrophe() {
+                        let Some(next_chunk) = cursor.next_chunk() else {
+                            let token_len = cursor.token_len_eof(token_start);
+                            let out = write_token(out, kind, token_len);
+                            return out;
+                        };
+                        cursor.chunk = next_chunk;
+                    }
 
-        cursor.chunk.advance(1);
-        let token_len = cursor.token_len(token_start);
-        let out = write_token(out, kind, token_len);
-        lex_loop(cursor, out)
-    }
-}
+                    let mut end = cursor.ptr();
+                    let mut num_backslashes = 0;
+                    while end > token_start {
+                        end = end.sub(1);
+                        if end.read() != b'\\' {
+                            break;
+                        }
+                        num_backslashes += 1;
+                    }
 
-fn lex_hash_string<const VEC_LEN: usize>(
-    cursor: &mut Cursor<'_, VEC_LEN>,
-    out: *mut u8,
-    token_start: *const u8,
-    kind: TokenKind,
-    num_open_hashes: usize,
-) -> *mut u8 {
-    unsafe {
-        debug_assert_matches!(
-            kind,
-            TokenKind::GuardedStr | TokenKind::RawStr | TokenKind::RawByteStr | TokenKind::RawCStr
-        );
-
-        match kind {
-            TokenKind::GuardedStr => {
-                debug_assert_eq!(token_start.add(0).read(), b'#');
-            }
-            TokenKind::RawStr => {
-                debug_assert_eq!(token_start.add(0).read(), b'r');
-                debug_assert_eq!(token_start.add(1).read(), b'#');
-            }
-            TokenKind::RawByteStr => {
-                debug_assert_eq!(token_start.add(0).read(), b'b');
-                debug_assert_eq!(token_start.add(1).read(), b'r');
-                debug_assert_eq!(token_start.add(2).read(), b'#');
-            }
-            TokenKind::RawCStr => {
-                debug_assert_eq!(token_start.add(0).read(), b'c');
-                debug_assert_eq!(token_start.add(1).read(), b'r');
-                debug_assert_eq!(token_start.add(2).read(), b'#');
-            }
-            _ => {}
-        }
-
-        cursor.chunk.advance(1);
-        cursor.refill_if_needed();
-        loop {
-            while cursor.chunk.eat_upto_quote() {
-                match cursor.next_chunk() {
-                    Some(next_chunk) => cursor.chunk = next_chunk,
-                    None => {
-                        let token_len = cursor.token_len_eof(token_start);
-                        let out = write_token(out, kind, token_len);
-                        return out;
+                    cursor.chunk.advance(1);
+                    if num_backslashes % 2 == 0 {
+                        let token_len = cursor.token_len(token_start);
+                        out = write_token(out, kind, token_len);
+                        continue 'outer;
                     }
                 }
             }
 
-            debug_assert_eq!(cursor.ptr().read(), b'"');
-            cursor.chunk.advance(1);
-            cursor.refill_if_needed();
-
-            let mut num_remaining_hashes = num_open_hashes;
-            loop {
-                let len = cursor.chunk.hash.leading_ones();
-                if len >= num_remaining_hashes {
-                    cursor.chunk.advance(num_remaining_hashes);
-                    let token_len = cursor.token_len(token_start);
-                    let out = write_token(out, kind, token_len);
-                    return lex_loop(cursor, out);
-                }
-
-                num_remaining_hashes -= len;
-                if len >= cursor.chunk.remainder {
-                    cursor.chunk = cursor.next_chunk_unchecked();
-                } else {
-                    cursor.chunk.advance(len);
-                    break;
-                }
+            if cursor.peek() == EOF_BYTE {
+                return out;
             }
+
+            cursor.chunk = cursor.next_chunk().unwrap();
         }
     }
 }
