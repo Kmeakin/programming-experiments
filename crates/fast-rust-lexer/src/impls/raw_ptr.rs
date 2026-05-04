@@ -48,12 +48,12 @@ impl<const VEC_LEN: usize, F: FnMut(TokenKind, *const u8, *const u8)> JumpTable<
             let mut i = 0;
             while i < 256 {
                 fns[i] = match i as u8 {
-                    b'(' => Self::open_paren,
-                    b')' => Self::close_paren,
-                    b'[' => Self::open_bracket,
-                    b']' => Self::close_bracket,
-                    b'{' => Self::open_brace,
-                    b'}' => Self::close_brace,
+                    b'(' => Self::lparen,
+                    b')' => Self::rparen,
+                    b'[' => Self::lsquare,
+                    b']' => Self::rsquare,
+                    b'{' => Self::lcurly,
+                    b'}' => Self::rcurly,
                     b',' => Self::comma,
                     b';' => Self::semi,
                     b':' => Self::colon,
@@ -112,12 +112,12 @@ impl<const VEC_LEN: usize, F: FnMut(TokenKind, *const u8, *const u8)> JumpTable<
         become self.fns[byte0 as usize](self, on_token, next_token_start, src_end);
     }
 
-    def_wrapper!(open_paren);
-    def_wrapper!(close_paren);
-    def_wrapper!(open_bracket);
-    def_wrapper!(close_bracket);
-    def_wrapper!(open_brace);
-    def_wrapper!(close_brace);
+    def_wrapper!(lparen);
+    def_wrapper!(rparen);
+    def_wrapper!(lsquare);
+    def_wrapper!(rsquare);
+    def_wrapper!(lcurly);
+    def_wrapper!(rcurly);
     def_wrapper!(comma);
     def_wrapper!(semi);
     def_wrapper!(colon);
@@ -159,22 +159,22 @@ macro_rules! def_punctuation {
     };
 }
 
-def_punctuation!(open_paren, OpenParen);
-def_punctuation!(close_paren, CloseParen);
-def_punctuation!(open_bracket, OpenBracket);
-def_punctuation!(close_bracket, CloseBracket);
-def_punctuation!(open_brace, OpenBrace);
-def_punctuation!(close_brace, CloseBrace);
+def_punctuation!(lparen, LParen);
+def_punctuation!(rparen, RParen);
+def_punctuation!(lsquare, LSquare);
+def_punctuation!(rsquare, RSquare);
+def_punctuation!(lcurly, LCurly);
+def_punctuation!(rcurly, RCurly);
 def_punctuation!(comma, Comma);
-def_punctuation!(semi, Semi);
+def_punctuation!(semi, Semicolon);
 def_punctuation!(colon, Colon);
 def_punctuation!(plus, Plus);
 def_punctuation!(minus, Minus);
 def_punctuation!(star, Star);
 def_punctuation!(percent, Percent);
 def_punctuation!(eq, Eq);
-def_punctuation!(and, And);
-def_punctuation!(or, Or);
+def_punctuation!(and, Ampersand);
+def_punctuation!(or, Bar);
 def_punctuation!(dollar, Dollar);
 def_punctuation!(question, Question);
 def_punctuation!(tilde, Tilde);
@@ -682,14 +682,14 @@ mod tests {
     #[test]
     fn punctuation() {
         check("()[]{},;:", &expect![[r#"
-            (OpenParen, 0..1, "(")
-            (CloseParen, 1..2, ")")
-            (OpenBracket, 2..3, "[")
-            (CloseBracket, 3..4, "]")
-            (OpenBrace, 4..5, "{")
-            (CloseBrace, 5..6, "}")
+            (LParen, 0..1, "(")
+            (RParen, 1..2, ")")
+            (LSquare, 2..3, "[")
+            (RSquare, 3..4, "]")
+            (LCurly, 4..5, "{")
+            (RCurly, 5..6, "}")
             (Comma, 6..7, ",")
-            (Semi, 7..8, ";")
+            (Semicolon, 7..8, ";")
             (Colon, 8..9, ":")"#]]);
 
         check("+-*%=&|$?~#@.!><^/", &expect![[r##"
@@ -698,8 +698,8 @@ mod tests {
             (Star, 2..3, "*")
             (Percent, 3..4, "%")
             (Eq, 4..5, "=")
-            (And, 5..6, "&")
-            (Or, 6..7, "|")
+            (Ampersand, 5..6, "&")
+            (Bar, 6..7, "|")
             (Dollar, 7..8, "$")
             (Question, 8..9, "?")
             (Tilde, 9..10, "~")

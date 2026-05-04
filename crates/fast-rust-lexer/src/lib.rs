@@ -18,144 +18,191 @@ pub use crate::impls::*;
 mod tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
 pub enum TokenKind {
-    /// A line comment, e.g. `// comment`.
-    LineComment,
+    Bang      = b'!',
+    Hash      = b'#',
+    Dollar    = b'$',
+    Percent   = b'%',
+    Ampersand = b'&',
+    LParen    = b'(',
+    RParen    = b')',
+    Star      = b'*',
+    Plus      = b'+',
+    Comma     = b',',
+    Minus     = b'-',
+    Dot       = b'.',
+    Slash     = b'/',
+    Colon     = b':',
+    Semicolon = b';',
+    Lt        = b'<',
+    Eq        = b'=',
+    Gt        = b'>',
+    Question  = b'?',
+    At        = b'@',
+    LSquare   = b'[',
+    RSquare   = b']',
+    Caret     = b'^',
+    LCurly    = b'{',
+    Bar       = b'|',
+    RCurly    = b'}',
+    Tilde     = b'~',
+    // Not valid punctuation, but we can use the same byte for simplicity
+    Backslash = b'\\',
+    Backquote = b'`',
 
-    /// A block comment, e.g. `/* block comment */`.
-    ///
-    /// Block comments can be recursive, so a sequence like `/* /* */`
-    /// will not be considered terminated and will result in a parsing error.
+    Whitespace,
+    LineComment,
     BlockComment,
 
-    /// Any whitespace character sequence.
-    Whitespace,
-
-    Frontmatter,
-
-    /// An identifier or keyword, e.g. `ident` or `continue`.
     Ident,
-
-    /// An identifier that is invalid because it contains emoji.
-    InvalidIdent,
-
-    /// A raw identifier, e.g. "r#ident".
     RawIdent,
+    Int,
+    Float,
 
-    /// An unknown literal prefix, like `foo#`, `foo'`, `foo"`. Excludes
-    /// literal prefixes that contain emoji, which are considered "invalid".
-    ///
-    /// Note that only the
-    /// prefix (`foo`) is included in the token, not the separator (which is
-    /// lexed as its own distinct token). In Rust 2021 and later, reserved
-    /// prefixes are reported as errors; in earlier editions, they result in a
-    /// (allowed by default) lint, and are treated as regular identifier
-    /// tokens.
-    UnknownPrefix,
+    Str,
+    RawStr,
+    CStr,
+    RawCStr,
+    ByteStr,
+    RawByteStr,
+    GuardedStr,
 
-    /// An unknown prefix in a lifetime, like `'foo#`.
-    ///
-    /// Like `UnknownPrefix`, only the `'` and prefix are included in the token
-    /// and not the separator.
-    UnknownPrefixLifetime,
-
-    /// A raw lifetime, e.g. `'r#foo`. In edition < 2021 it will be split into
-    /// several tokens: `'r` and `#` and `foo`.
+    Char,
+    Byte,
+    Lifetime,
     RawLifetime,
 
-    /// Guarded string literal prefix: `#"` or `##`.
-    ///
-    /// Used for reserving "guarded strings" (RFC 3598) in edition 2024.
-    /// Split into the component tokens on older editions.
-    GuardedStrPrefix,
-
-    // Literals, e.g. `12u8`, `1.0e-40`, `b"123"`. Note that `_` is an invalid
-    // suffix, but may be present here on string and float literals. Users of
-    // this type will need to check for and reject that case.
-    /// `12_u8`, `0o100`, `0b120i99`, `1f32`.
-    Int,
-    /// `12.34f32`, `1e3`, but not `1f32`.
-    Float,
-    /// `'a'`, `'\\'`, `'''`, `';`
-    Char,
-    /// `b'a'`, `b'\\'`, `b'''`, `b';`
-    Byte,
-    /// `"abc"`, `"abc`
-    Str,
-    /// `b"abc"`, `b"abc`
-    ByteStr,
-    /// `c"abc"`, `c"abc`
-    CStr,
-    /// `r"abc"`, `r#"abc"#`, `r####"ab"###"c"####`, `r#"a`. `None` indicates
-    /// an invalid literal.
-    RawStr,
-    /// `br"abc"`, `br#"abc"#`, `br####"ab"###"c"####`, `br#"a`. `None`
-    /// indicates an invalid literal.
-    RawByteStr,
-    /// `cr"abc"`, "cr#"abc"#", `cr#"a`. `None` indicates an invalid literal.
-    RawCStr,
-
-    /// A lifetime, e.g. `'a`.
-    Lifetime,
-
-    /// `;`
-    Semi,
-    /// `,`
-    Comma,
-    /// `.`
-    Dot,
-    /// `(`
-    OpenParen,
-    /// `)`
-    CloseParen,
-    /// `{`
-    OpenBrace,
-    /// `}`
-    CloseBrace,
-    /// `[`
-    OpenBracket,
-    /// `]`
-    CloseBracket,
-    /// `@`
-    At,
-    /// `#`
-    Hash,
-    /// `~`
-    Tilde,
-    /// `?`
-    Question,
-    /// `:`
-    Colon,
-    /// `$`
-    Dollar,
-    /// `=`
-    Eq,
-    /// `!`
-    Bang,
-    /// `<`
-    Lt,
-    /// `>`
-    Gt,
-    /// `-`
-    Minus,
-    /// `&`
-    And,
-    /// `|`
-    Or,
-    /// `+`
-    Plus,
-    /// `*`
-    Star,
-    /// `/`
-    Slash,
-    /// `^`
-    Caret,
-    /// `%`
-    Percent,
-
-    /// Unknown token, not expected by the lexer, e.g. "№"
     Unknown,
+}
 
-    /// End of input.
-    Eof,
+impl TokenKind {
+    pub fn from_u8(b: u8) -> Option<Self> {
+        if b == Self::Whitespace as u8 {
+            return Some(Self::Whitespace);
+        }
+        if b == Self::LineComment as u8 {
+            return Some(Self::LineComment);
+        }
+        if b == Self::BlockComment as u8 {
+            return Some(Self::BlockComment);
+        }
+
+        if b == Self::Ident as u8 {
+            return Some(Self::Ident);
+        }
+        if b == Self::RawIdent as u8 {
+            return Some(Self::RawIdent);
+        }
+        if b == Self::Int as u8 {
+            return Some(Self::Int);
+        }
+        if b == Self::Float as u8 {
+            return Some(Self::Float);
+        }
+
+        if b == Self::Str as u8 {
+            return Some(Self::Str);
+        }
+        if b == Self::RawStr as u8 {
+            return Some(Self::RawStr);
+        }
+        if b == Self::CStr as u8 {
+            return Some(Self::CStr);
+        }
+        if b == Self::RawCStr as u8 {
+            return Some(Self::RawCStr);
+        }
+        if b == Self::ByteStr as u8 {
+            return Some(Self::ByteStr);
+        }
+        if b == Self::RawByteStr as u8 {
+            return Some(Self::RawByteStr);
+        }
+
+        if b == Self::Char as u8 {
+            return Some(Self::Char);
+        }
+        if b == Self::Byte as u8 {
+            return Some(Self::Byte);
+        }
+        if b == Self::Lifetime as u8 {
+            return Some(Self::Lifetime);
+        }
+        if b == Self::RawLifetime as u8 {
+            return Some(Self::RawLifetime);
+        }
+
+        if b == Self::Unknown as u8 {
+            return Some(Self::Unknown);
+        }
+
+        Some(match b {
+            b'!' => Self::Bang,
+            b'#' => Self::Hash,
+            b'$' => Self::Dollar,
+            b'%' => Self::Percent,
+            b'&' => Self::Ampersand,
+            b'(' => Self::LParen,
+            b')' => Self::RParen,
+            b'*' => Self::Star,
+            b'+' => Self::Plus,
+            b',' => Self::Comma,
+            b'-' => Self::Minus,
+            b'.' => Self::Dot,
+            b'/' => Self::Slash,
+            b':' => Self::Colon,
+            b';' => Self::Semicolon,
+            b'<' => Self::Lt,
+            b'=' => Self::Eq,
+            b'>' => Self::Gt,
+            b'?' => Self::Question,
+            b'@' => Self::At,
+            b'[' => Self::LSquare,
+            b']' => Self::RSquare,
+            b'^' => Self::Caret,
+            b'{' => Self::LCurly,
+            b'|' => Self::Bar,
+            b'}' => Self::RCurly,
+            b'~' => Self::Tilde,
+            b'\\' => Self::Backslash,
+            b'`' => Self::Backquote,
+            _ => return None,
+        })
+    }
+
+    pub fn is_punct(self) -> bool {
+        matches!(
+            self,
+            Self::Bang
+                | Self::Hash
+                | Self::Dollar
+                | Self::Percent
+                | Self::Ampersand
+                | Self::LParen
+                | Self::RParen
+                | Self::Star
+                | Self::Plus
+                | Self::Comma
+                | Self::Minus
+                | Self::Dot
+                | Self::Slash
+                | Self::Colon
+                | Self::Semicolon
+                | Self::Lt
+                | Self::Eq
+                | Self::Gt
+                | Self::Question
+                | Self::At
+                | Self::LSquare
+                | Self::RSquare
+                | Self::Caret
+                | Self::LCurly
+                | Self::Bar
+                | Self::RCurly
+                | Self::Tilde
+                | Self::Backslash
+                | Self::Backquote
+        )
+    }
 }

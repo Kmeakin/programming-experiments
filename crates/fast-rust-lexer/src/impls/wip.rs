@@ -182,3 +182,146 @@ mod tests {
         ]]);
     }
 }
+
+#[repr(u8)]
+#[rustfmt::skip]
+enum StructuralChar {
+    Tab     = b'\t', // 0x09
+    Newline = b'\n', // 0x0a
+    Space   = b' ',  // 0x20
+    DQuote  = b'"',  // 0x22
+    Hash    = b'#',  // 0x23
+    SQuote  = b'\'', // 0x27
+    Star    = b'*',  // 0x2a
+    Slash   = b'/',  // 0x2f
+    Int,       // 0x39 - 0x39 ('0' - '9')
+    Uppercase, // 0x41 - 0x5a ('A' - 'Z')
+    Lowercase, // 0x61 - 0x7a ('a' - 'z')
+    Underscore = b'_', // 0x5f
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum CharClass {
+    Other = 0,
+    Whitespace = 1 << 0,
+    Space = 1 << 1,
+    DQuote = 1 << 2,
+    SQuote = 1 << 3,
+    Hash = 1 << 4,
+    Star = 1 << 5,
+    Slash = 1 << 6,
+}
+
+// Sets: {0x09, 0x0a}, {0x20}, {0x22}, {0x23}, {0x27}, {0x2a}, {0x2f}
+const LUT: Lut = {
+    let mut lo = [0u8; 16];
+    let mut hi = [0u8; 16];
+
+    // tab, newline: {0x09, 0x0a}
+    hi[0x0] |= CharClass::Whitespace as u8;
+    lo[0x9] |= CharClass::Whitespace as u8;
+    hi[0x0] |= CharClass::Whitespace as u8;
+    lo[0xa] |= CharClass::Whitespace as u8;
+
+    // space: {0x20}
+    hi[0x2] |= CharClass::Space as u8;
+    lo[0x0] |= CharClass::Space as u8;
+
+    // double quote: {0x22}
+    hi[0x2] |= CharClass::DQuote as u8;
+    lo[0x2] |= CharClass::DQuote as u8;
+
+    // hash: {0x23}
+    hi[0x2] |= CharClass::Hash as u8;
+    lo[0x3] |= CharClass::Hash as u8;
+
+    // single quote: {0x27}
+    hi[0x2] |= CharClass::SQuote as u8;
+    lo[0x7] |= CharClass::SQuote as u8;
+
+    // star: {0x2a}
+    hi[0x2] |= CharClass::Star as u8;
+    lo[0xa] |= CharClass::Star as u8;
+
+    // slash: {0x2f}
+    hi[0x2] |= CharClass::Slash as u8;
+    lo[0xf] |= CharClass::Slash as u8;
+
+    Lut {
+        lo: Simd::from_array(lo),
+        hi: Simd::from_array(hi),
+    }
+};
+
+struct Lut {
+    lo: Simd<u8, 16>,
+    hi: Simd<u8, 16>,
+}
+
+impl Lut {
+    fn lookup_16(&self, data: Simd<u8, 16>) -> Simd<u8, 16> {
+        let lo_nibble = data & Simd::splat(0x0f);
+        let hi_nibble = data >> 4;
+        let tbl_lo = self.lo.swizzle_dyn(lo_nibble);
+        let tbl_hi = self.hi.swizzle_dyn(hi_nibble);
+        tbl_lo & tbl_hi
+    }
+
+    fn lookup_32(&self, data: Simd<u8, 32>) -> Simd<u8, 32> {
+        let v0 = data.extract::<00, 16>();
+        let v1 = data.extract::<16, 16>();
+
+        let r0 = self.lookup_16(v0);
+        let r1 = self.lookup_16(v1);
+        Simd::from_slice([r0.to_array(), r1.to_array()].as_flattened())
+    }
+
+    fn lookup_64(&self, data: Simd<u8, 64>) -> Simd<u8, 64> {
+        let v0 = data.extract::<00, 16>();
+        let v1 = data.extract::<16, 16>();
+        let v2 = data.extract::<32, 16>();
+        let v3 = data.extract::<48, 16>();
+
+        let r0 = self.lookup_16(v0);
+        let r1 = self.lookup_16(v1);
+        let r2 = self.lookup_16(v2);
+        let r3 = self.lookup_16(v3);
+        Simd::from_slice(
+            [r0.to_array(), r1.to_array(), r2.to_array(), r3.to_array()].as_flattened(),
+        )
+    }
+
+    fn lookup<const VEC_LEN: usize>(&self, data: Simd<u8, VEC_LEN>) -> Simd<u8, VEC_LEN> {
+        match VEC_LEN {
+            16 => self.lookup_16(data.resize(0)).resize(0),
+            32 => self.lookup_32(data.resize(0)).resize(0),
+            64 => self.lookup_64(data.resize(0)).resize(0),
+            _ => unimplemented!(),
+        }
+    }
+}
+
+pub fn classify<const VEC_LEN: usize>(input: &[u8], out: &mut [u8]) {
+    debug_assert!(u32::try_from(input.len()).is_ok());
+    debug_assert!(input.ends_with([[EOF_BYTE; VEC_LEN]; 2].as_flattened()));
+    debug_assert!(out.len() >= input.len());
+
+    unsafe {
+        let std::ops::Range { start, end } = input.as_ptr_range();
+        let end = end.sub(VEC_LEN * 2);
+        let mut cur = start;
+        let mut out = out.as_mut_ptr();
+
+        loop {
+            let chunk = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let classified_chunk = LUT.lookup(chunk);
+            out.cast::<Simd<u8, VEC_LEN>>()
+                .write_unaligned(classified_chunk);
+            out = out.add(VEC_LEN);
+            cur = cur.add(VEC_LEN);
+            if cur >= end {
+                break;
+            }
+        }
+    }
+}

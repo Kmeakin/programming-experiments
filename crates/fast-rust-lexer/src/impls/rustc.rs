@@ -60,7 +60,7 @@ const _: () = {
 #[derive(Debug)]
 pub struct Token {
     pub kind: TokenKind,
-    pub len: u32,
+    pub len:  u32,
 }
 
 impl Token {
@@ -78,7 +78,7 @@ pub enum TokenKind {
     /// Block comments can be recursive, so a sequence like `/* /* */`
     /// will not be considered terminated and will result in a parsing error.
     BlockComment {
-        doc_style: Option<DocStyle>,
+        doc_style:  Option<DocStyle>,
         terminated: bool,
     },
 
@@ -87,7 +87,7 @@ pub enum TokenKind {
 
     Frontmatter {
         has_invalid_preceding_whitespace: bool,
-        invalid_infostring: bool,
+        invalid_infostring:               bool,
     },
 
     /// An identifier or keyword, e.g. `ident` or `continue`.
@@ -132,7 +132,7 @@ pub enum TokenKind {
     ///
     /// See [LiteralKind] for more details.
     Literal {
-        kind: LiteralKind,
+        kind:         LiteralKind,
         suffix_start: u32,
     },
 
@@ -218,7 +218,10 @@ pub enum LiteralKind {
     /// `12_u8`, `0o100`, `0b120i99`, `1f32`.
     Int { base: Base, empty_int: bool },
     /// `12.34f32`, `1e3`, but not `1f32`.
-    Float { base: Base, empty_exponent: bool },
+    Float {
+        base:           Base,
+        empty_exponent: bool,
+    },
     /// `'a'`, `'\\'`, `'''`, `';`
     Char { terminated: bool },
     /// `b'a'`, `b'\\'`, `b'''`, `b';`
@@ -245,9 +248,9 @@ pub enum LiteralKind {
 /// for more efficient lexing and better backwards diagnostics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct GuardedStr {
-    pub n_hashes: u32,
+    pub n_hashes:   u32,
     pub terminated: bool,
-    pub token_len: u32,
+    pub token_len:  u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -270,11 +273,11 @@ pub enum RawStrError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Base {
     /// Literal starts with "0b".
-    Binary = 2,
+    Binary      = 2,
     /// Literal starts with "0o".
-    Octal = 8,
+    Octal       = 8,
     /// Literal doesn't contain a prefix.
-    Decimal = 10,
+    Decimal     = 10,
     /// Literal starts with "0x".
     Hexadecimal = 16,
 }
@@ -1351,15 +1354,15 @@ impl From<TokenKind> for crate::TokenKind {
                 LiteralKind::RawCStr { .. } => Self::RawCStr,
             },
             TokenKind::Lifetime { .. } => Self::Lifetime,
-            TokenKind::Semi => Self::Semi,
+            TokenKind::Semi => Self::Semicolon,
             TokenKind::Comma => Self::Comma,
             TokenKind::Dot => Self::Dot,
-            TokenKind::OpenParen => Self::OpenParen,
-            TokenKind::CloseParen => Self::CloseParen,
-            TokenKind::OpenBrace => Self::OpenBrace,
-            TokenKind::CloseBrace => Self::CloseBrace,
-            TokenKind::OpenBracket => Self::OpenBracket,
-            TokenKind::CloseBracket => Self::CloseBracket,
+            TokenKind::OpenParen => Self::LParen,
+            TokenKind::CloseParen => Self::RParen,
+            TokenKind::OpenBracket => Self::LSquare,
+            TokenKind::CloseBracket => Self::RSquare,
+            TokenKind::OpenBrace => Self::LCurly,
+            TokenKind::CloseBrace => Self::RCurly,
             TokenKind::At => Self::At,
             TokenKind::Pound => Self::Hash,
             TokenKind::Tilde => Self::Tilde,
@@ -1371,15 +1374,15 @@ impl From<TokenKind> for crate::TokenKind {
             TokenKind::Lt => Self::Lt,
             TokenKind::Gt => Self::Gt,
             TokenKind::Minus => Self::Minus,
-            TokenKind::And => Self::And,
-            TokenKind::Or => Self::Or,
+            TokenKind::And => Self::Ampersand,
+            TokenKind::Or => Self::Bar,
             TokenKind::Plus => Self::Plus,
             TokenKind::Star => Self::Star,
             TokenKind::Slash => Self::Slash,
             TokenKind::Caret => Self::Caret,
             TokenKind::Percent => Self::Percent,
             TokenKind::Unknown => Self::Unknown,
-            TokenKind::Frontmatter { .. } => Self::Frontmatter,
+            TokenKind::Frontmatter { .. } => todo!(),
             TokenKind::InvalidIdent => todo!(),
             TokenKind::UnknownPrefix => todo!(),
             TokenKind::UnknownPrefixLifetime => todo!(),

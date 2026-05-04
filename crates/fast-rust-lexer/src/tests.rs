@@ -61,7 +61,7 @@ fn lex_simd<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
         if byte == simd::EOF_BYTE {
             break;
         }
-        let Some(kind) = simd::TokenKind::from_u8(byte) else {
+        let Some(kind) = TokenKind::from_u8(byte) else {
             panic!("Invalid token kind byte: {byte} ({byte:#04x})");
         };
         let len = match kind.is_punct() {

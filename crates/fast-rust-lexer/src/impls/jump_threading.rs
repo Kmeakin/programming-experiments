@@ -1,5 +1,6 @@
-use crate::TokenKind;
 use std::simd::prelude::*;
+
+use crate::TokenKind;
 
 type LexFn<F> = extern "rust-preserve-none" fn(&JumpTable<F>, F, &[u8]);
 
@@ -54,12 +55,12 @@ impl<F: FnMut(TokenKind, usize)> JumpTable<F> {
             let mut i = 0;
             while i < 256 {
                 fns[i] = match i as u8 {
-                    b'(' => Self::open_paren,
-                    b')' => Self::close_paren,
-                    b'[' => Self::open_bracket,
-                    b']' => Self::close_bracket,
-                    b'{' => Self::open_brace,
-                    b'}' => Self::close_brace,
+                    b'(' => Self::lparen,
+                    b')' => Self::rparen,
+                    b'[' => Self::lsquare,
+                    b']' => Self::rsquare,
+                    b'{' => Self::lcurly,
+                    b'}' => Self::rcurly,
                     b',' => Self::comma,
                     b';' => Self::semi,
                     b':' => Self::colon,
@@ -105,22 +106,22 @@ impl<F: FnMut(TokenKind, usize)> JumpTable<F> {
     }
 
     single_fn!(unknown, Unknown);
-    single_fn!(open_paren, OpenParen);
-    single_fn!(close_paren, CloseParen);
-    single_fn!(open_bracket, OpenBracket);
-    single_fn!(close_bracket, CloseBracket);
-    single_fn!(open_brace, OpenBrace);
-    single_fn!(close_brace, CloseBrace);
+    single_fn!(lparen, LParen);
+    single_fn!(rparen, RParen);
+    single_fn!(lsquare, LSquare);
+    single_fn!(rsquare, RSquare);
+    single_fn!(lcurly, LCurly);
+    single_fn!(rcurly, RCurly);
     single_fn!(comma, Comma);
-    single_fn!(semi, Semi);
+    single_fn!(semi, Semicolon);
     single_fn!(colon, Colon);
     single_fn!(plus, Plus);
     single_fn!(minus, Minus);
     single_fn!(star, Star);
     single_fn!(percent, Percent);
     single_fn!(eq, Eq);
-    single_fn!(and, And);
-    single_fn!(or, Or);
+    single_fn!(and, Ampersand);
+    single_fn!(or, Bar);
     single_fn!(dollar, Dollar);
     single_fn!(question, Question);
     single_fn!(tilde, Tilde);
@@ -413,8 +414,7 @@ fn eat_decimal(input: &[u8]) -> &[u8] {
 
 #[cfg(test)]
 mod tests {
-    use expect_test::Expect;
-    use expect_test::expect;
+    use expect_test::{Expect, expect};
 
     fn check(input: &str, expected: &Expect) {
         let mut start = 0;
@@ -507,14 +507,14 @@ mod tests {
     #[test]
     fn punctuation() {
         check("()[]{},;:", &expect![[r#"
-            (OpenParen, 0..1, "(")
-            (CloseParen, 1..2, ")")
-            (OpenBracket, 2..3, "[")
-            (CloseBracket, 3..4, "]")
-            (OpenBrace, 4..5, "{")
-            (CloseBrace, 5..6, "}")
+            (LParen, 0..1, "(")
+            (RParen, 1..2, ")")
+            (LSquare, 2..3, "[")
+            (RSquare, 3..4, "]")
+            (LCurly, 4..5, "{")
+            (RCurly, 5..6, "}")
             (Comma, 6..7, ",")
-            (Semi, 7..8, ";")
+            (Semicolon, 7..8, ";")
             (Colon, 8..9, ":")"#]]);
 
         check("+-*%=&|$?~#@.!><^/", &expect![[r##"
@@ -523,8 +523,8 @@ mod tests {
             (Star, 2..3, "*")
             (Percent, 3..4, "%")
             (Eq, 4..5, "=")
-            (And, 5..6, "&")
-            (Or, 6..7, "|")
+            (Ampersand, 5..6, "&")
+            (Bar, 6..7, "|")
             (Dollar, 7..8, "$")
             (Question, 8..9, "?")
             (Tilde, 9..10, "~")

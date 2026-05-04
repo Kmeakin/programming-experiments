@@ -11,14 +11,14 @@ pub fn lex_loop(input: &str, mut on_token: impl FnMut(TokenKind, u32)) {
     loop {
         let [byte, bytes1 @ ..] = bytes0 else { break };
         let (kind, len) = match byte {
-            b'(' => (TokenKind::OpenParen, 1),
-            b')' => (TokenKind::CloseParen, 1),
-            b'[' => (TokenKind::OpenBracket, 1),
-            b']' => (TokenKind::CloseBracket, 1),
-            b'{' => (TokenKind::OpenBrace, 1),
-            b'}' => (TokenKind::CloseBrace, 1),
+            b'(' => (TokenKind::LParen, 1),
+            b')' => (TokenKind::RParen, 1),
+            b'[' => (TokenKind::LSquare, 1),
+            b']' => (TokenKind::RSquare, 1),
+            b'{' => (TokenKind::LCurly, 1),
+            b'}' => (TokenKind::RCurly, 1),
             b',' => (TokenKind::Comma, 1),
-            b';' => (TokenKind::Semi, 1),
+            b';' => (TokenKind::Semicolon, 1),
             b':' => (TokenKind::Colon, 1),
 
             b'+' => (TokenKind::Plus, 1),
@@ -26,8 +26,8 @@ pub fn lex_loop(input: &str, mut on_token: impl FnMut(TokenKind, u32)) {
             b'*' => (TokenKind::Star, 1),
             b'%' => (TokenKind::Percent, 1),
             b'=' => (TokenKind::Eq, 1),
-            b'&' => (TokenKind::And, 1),
-            b'|' => (TokenKind::Or, 1),
+            b'&' => (TokenKind::Ampersand, 1),
+            b'|' => (TokenKind::Bar, 1),
             b'$' => (TokenKind::Dollar, 1),
 
             b'?' => (TokenKind::Question, 1),
@@ -309,8 +309,7 @@ fn char_or_lifetime(mut bytes1: &[u8]) -> (TokenKind, usize) {
 
 #[cfg(test)]
 mod tests {
-    use expect_test::Expect;
-    use expect_test::expect;
+    use expect_test::{Expect, expect};
 
     fn check(input: &str, expected: &Expect) {
         let mut start = 0;
@@ -403,14 +402,14 @@ mod tests {
     #[test]
     fn punctuation() {
         check("()[]{},;:", &expect![[r#"
-            (OpenParen, 0..1, "(")
-            (CloseParen, 1..2, ")")
-            (OpenBracket, 2..3, "[")
-            (CloseBracket, 3..4, "]")
-            (OpenBrace, 4..5, "{")
-            (CloseBrace, 5..6, "}")
+            (LParen, 0..1, "(")
+            (RParen, 1..2, ")")
+            (LSquare, 2..3, "[")
+            (RSquare, 3..4, "]")
+            (LCurly, 4..5, "{")
+            (RCurly, 5..6, "}")
             (Comma, 6..7, ",")
-            (Semi, 7..8, ";")
+            (Semicolon, 7..8, ";")
             (Colon, 8..9, ":")"#]]);
 
         check("+-*%=&|$?~#@.!><^/", &expect![[r##"
@@ -419,8 +418,8 @@ mod tests {
             (Star, 2..3, "*")
             (Percent, 3..4, "%")
             (Eq, 4..5, "=")
-            (And, 5..6, "&")
-            (Or, 6..7, "|")
+            (Ampersand, 5..6, "&")
+            (Bar, 6..7, "|")
             (Dollar, 7..8, "$")
             (Question, 8..9, "?")
             (Tilde, 9..10, "~")
