@@ -1,4 +1,4 @@
-use crate::{TokenKind, raw_ptr, simd};
+use crate::{TokenKind, raw_ptr, simd, simd2};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -68,7 +68,33 @@ fn lex_simd<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
             true => 1,
             false => u32::from_ne_bytes(iter.next_chunk().expect("Expected length byte")),
         };
-        tokens.push((TokenKind::from(kind), len));
+        tokens.push((kind, len));
+    }
+    tokens
+}
+
+fn lex_simd2<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
+    debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
+    let mut input = input.as_bytes().to_vec();
+    input.extend([simd::EOF_BYTE; VEC_LEN]);
+    input.extend([simd::EOF_BYTE; VEC_LEN]);
+    let mut out_vec = vec![simd::EOF_BYTE; input.len() * 5];
+    let out = simd2::lex::<VEC_LEN>(&input, &mut out_vec);
+
+    let mut tokens = Vec::new();
+    let mut iter = out.iter().copied();
+    while let Some(byte) = iter.next() {
+        if byte == simd::EOF_BYTE {
+            break;
+        }
+        let Some(kind) = TokenKind::from_u8(byte) else {
+            panic!("Invalid token kind byte: {byte} ({byte:#04x})");
+        };
+        let len = match kind.is_punct() {
+            true => 1,
+            false => u32::from_ne_bytes(iter.next_chunk().expect("Expected length byte")),
+        };
+        tokens.push((kind, len));
     }
     tokens
 }
@@ -124,3 +150,12 @@ fn test_simd_32() { check(lex_simd::<32>); }
 
 #[test]
 fn test_simd_64() { check(lex_simd::<64>); }
+
+#[test]
+fn test_simd2_16() { check(lex_simd2::<16>); }
+
+#[test]
+fn test_simd2_32() { check(lex_simd2::<32>); }
+
+#[test]
+fn test_simd2_64() { check(lex_simd2::<64>); }

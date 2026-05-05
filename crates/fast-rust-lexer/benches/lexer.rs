@@ -446,34 +446,6 @@ fn multi_pass(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(false)]
-fn simd2(c: &mut Criterion) {
-    let input = get_input();
-    let mut input = input.into_bytes();
-    input.extend([simd::EOF_BYTE; 128]);
-    let input = input.as_slice();
-
-    let mut group = c.benchmark_group("simd");
-    group.throughput(Throughput::Bytes(input.len() as u64));
-
-    group.bench_function("classify::<16>", |b| {
-        let mut output = vec![0; input.len()];
-        b.iter(|| simd::classify::<16>(input, output.as_mut_slice()));
-    });
-
-    group.bench_function("classify::<32>", |b| {
-        let mut output = vec![0; input.len()];
-        b.iter(|| simd::classify::<32>(input, output.as_mut_slice()));
-    });
-
-    group.bench_function("classify::<64>", |b| {
-        let mut output = vec![0; input.len()];
-        b.iter(|| simd::classify::<64>(input, output.as_mut_slice()));
-    });
-
-    group.finish();
-}
-
 fn simd(c: &mut Criterion) {
     let input = get_input();
     let mut input = input.into_bytes();
@@ -510,6 +482,42 @@ fn simd(c: &mut Criterion) {
     group.finish();
 }
 
+fn simd2(c: &mut Criterion) {
+    let input = get_input();
+    let mut input = input.into_bytes();
+    input.extend([simd::EOF_BYTE; 128]);
+    let input = input.as_slice();
+
+    let mut group = c.benchmark_group("simd2");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+
+    group.bench_function("simd2::lex::<16>", |b| {
+        let mut output = vec![0xff; input.len() * 5];
+        b.iter(|| {
+            let output = simd::lex::<16>(input, &mut output);
+            black_box(output);
+        });
+    });
+
+    group.bench_function("simd2::lex::<32>", |b| {
+        let mut output = vec![0xff; input.len() * 5];
+        b.iter(|| {
+            let output = simd::lex::<32>(input, &mut output);
+            black_box(output);
+        });
+    });
+
+    group.bench_function("simd2::lex::<64>", |b| {
+        let mut output = vec![0xff; input.len() * 5];
+        b.iter(|| {
+            let output = simd::lex::<64>(input, &mut output);
+            black_box(output);
+        });
+    });
+
+    group.finish();
+}
+
 fn main() {
     let mut criterion: Criterion<_> = Criterion::default().configure_from_args();
     check_unicode(&mut criterion);
@@ -524,5 +532,6 @@ fn main() {
     raw_ptr::<64>(&mut criterion);
     multi_pass(&mut criterion);
     simd(&mut criterion);
+    simd2(&mut criterion);
     Criterion::default().configure_from_args().final_summary();
 }
