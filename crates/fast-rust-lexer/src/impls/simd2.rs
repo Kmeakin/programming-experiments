@@ -288,7 +288,8 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::Byte, len as u32);
                     }
                     _ => {
-                        src = eat_ident::<VEC_LEN>(src.add(1));
+                        (chunk_start, src) =
+                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::Ident, len as u32);
                     }
@@ -310,7 +311,8 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::CStr, len as u32);
                     }
                     _ => {
-                        src = eat_ident::<VEC_LEN>(src.add(1));
+                        (chunk_start, src) =
+                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::Ident, len as u32);
                     }
@@ -332,7 +334,8 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::RawStr, len as u32);
                     }
                     _ => {
-                        src = eat_ident::<VEC_LEN>(src.add(1));
+                        (chunk_start, src) =
+                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::Ident, len as u32);
                     }
