@@ -161,23 +161,30 @@ unsafe fn skip_until<const VEC_LEN: usize>(
     id: MaskId,
 ) -> (*const u8, *const u8) {
     unsafe {
-        loop {
-            let chunk_consumed = src.offset_from_unsigned(chunk_start);
-            let len = (masks[id] << chunk_consumed).leading_zeros();
-            src = src.add(len);
+        let chunk_consumed = src.offset_from_unsigned(chunk_start);
+        let len = (masks[id] << chunk_consumed).leading_zeros();
+        src = src.add(len);
 
-            let next_chunk = chunk_start.add(VEC_LEN);
-            if src < next_chunk {
+        let mut next_chunk = chunk_start.add(VEC_LEN);
+        if src < next_chunk {
+            return (chunk_start, src);
+        }
+
+        loop {
+            chunk_start = next_chunk;
+            let vec = load::<VEC_LEN>(chunk_start);
+            let mask = get_bitstring(vec, id);
+            let len = mask.leading_zeros();
+            if len < VEC_LEN {
+                let src = chunk_start.add(len);
+                *masks = Masks::new(vec);
                 return (chunk_start, src);
             }
-            if src >= src_end {
+
+            next_chunk = chunk_start.add(VEC_LEN);
+            if next_chunk >= src_end {
                 return (src_end, src_end);
             }
-
-            chunk_start = next_chunk;
-            src = chunk_start;
-            let vec = load::<VEC_LEN>(chunk_start);
-            *masks = Masks::new(vec);
         }
     }
 }
