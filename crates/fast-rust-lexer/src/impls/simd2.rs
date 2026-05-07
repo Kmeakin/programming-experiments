@@ -70,7 +70,7 @@ fn ident_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VE
 }
 
 #[derive(Debug, Copy, Clone)]
-enum Mask {
+enum MaskId {
     Whitespace,
     Newline,
     Ident,
@@ -93,48 +93,62 @@ impl<const VEC_LEN: usize> Masks<VEC_LEN> {
     }
 }
 
-impl<const VEC_LEN: usize> std::ops::Index<Mask> for Masks<VEC_LEN> {
+fn get_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, id: MaskId) -> BitString<VEC_LEN> {
+    match id {
+        MaskId::Whitespace => whitespace_bitstring(vec),
+        MaskId::Newline => newline_bitstring(vec),
+        MaskId::Ident => ident_bitstring(vec),
+    }
+}
+
+impl<const VEC_LEN: usize> std::ops::Index<MaskId> for Masks<VEC_LEN> {
     type Output = BitString<VEC_LEN>;
-    fn index(&self, index: Mask) -> &Self::Output {
-        match index {
-            Mask::Whitespace => &self.whitespace,
-            Mask::Newline => &self.newline,
-            Mask::Ident => &self.ident,
+    fn index(&self, id: MaskId) -> &Self::Output {
+        match id {
+            MaskId::Whitespace => &self.whitespace,
+            MaskId::Newline => &self.newline,
+            MaskId::Ident => &self.ident,
         }
     }
 }
 
-impl<const VEC_LEN: usize> std::ops::IndexMut<Mask> for Masks<VEC_LEN> {
-    fn index_mut(&mut self, index: Mask) -> &mut Self::Output {
-        match index {
-            Mask::Whitespace => &mut self.whitespace,
-            Mask::Newline => &mut self.newline,
-            Mask::Ident => &mut self.ident,
+impl<const VEC_LEN: usize> std::ops::IndexMut<MaskId> for Masks<VEC_LEN> {
+    fn index_mut(&mut self, id: MaskId) -> &mut Self::Output {
+        match id {
+            MaskId::Whitespace => &mut self.whitespace,
+            MaskId::Newline => &mut self.newline,
+            MaskId::Ident => &mut self.ident,
         }
     }
 }
 
 unsafe fn skip_while<const VEC_LEN: usize>(
     mut chunk_start: *const u8,
-    mut src: *const u8,
+    src: *const u8,
     masks: &mut Masks<VEC_LEN>,
-    mask: Mask,
+    id: MaskId,
 ) -> (*const u8, *const u8) {
     unsafe {
-        loop {
-            let chunk_consumed = src.offset_from_unsigned(chunk_start);
-            let len = (masks[mask] << chunk_consumed).leading_ones();
-            src = src.add(len);
+        let chunk_consumed = src.offset_from_unsigned(chunk_start);
+        let len = (masks[id] << chunk_consumed).leading_ones();
+        let src = src.add(len);
 
-            let next_chunk = chunk_start.add(VEC_LEN);
-            if src < next_chunk {
+        let mut next_chunk = chunk_start.add(VEC_LEN);
+        if src < next_chunk {
+            return (chunk_start, src);
+        }
+
+        loop {
+            chunk_start = next_chunk;
+            let vec = load::<VEC_LEN>(chunk_start);
+            let mask = get_bitstring(vec, id);
+            let len = mask.leading_ones();
+            if len < VEC_LEN {
+                let src = chunk_start.add(len);
+                *masks = Masks::new(vec);
                 return (chunk_start, src);
             }
-
-            chunk_start = next_chunk;
-            src = chunk_start;
-            let vec = load::<VEC_LEN>(chunk_start);
-            *masks = Masks::new(vec);
+            next_chunk = chunk_start.add(VEC_LEN);
         }
     }
 }
@@ -144,12 +158,12 @@ unsafe fn skip_until<const VEC_LEN: usize>(
     mut src: *const u8,
     src_end: *const u8,
     masks: &mut Masks<VEC_LEN>,
-    mask: Mask,
+    id: MaskId,
 ) -> (*const u8, *const u8) {
     unsafe {
         loop {
             let chunk_consumed = src.offset_from_unsigned(chunk_start);
-            let len = (masks[mask] << chunk_consumed).leading_zeros();
+            let len = (masks[id] << chunk_consumed).leading_zeros();
             src = src.add(len);
 
             let next_chunk = chunk_start.add(VEC_LEN);
@@ -201,7 +215,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 b'/' => match src.add(1).read() {
                     b'/' => {
                         (chunk_start, src) =
-                            skip_until(chunk_start, src, src_end, &mut masks, Mask::Newline);
+                            skip_until(chunk_start, src, src_end, &mut masks, MaskId::Newline);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::LineComment, len as u32);
                     }
@@ -318,13 +332,14 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 },
 
                 b' ' | b'\n' | b'\t' => {
-                    (chunk_start, src) = skip_while(chunk_start, src, &mut masks, Mask::Whitespace);
+                    (chunk_start, src) =
+                        skip_while(chunk_start, src, &mut masks, MaskId::Whitespace);
                     let len = src.offset_from_unsigned(token_start);
                     out = write_token(out, TokenKind::Whitespace, len as u32);
                 }
 
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                    (chunk_start, src) = skip_while(chunk_start, src, &mut masks, Mask::Ident);
+                    (chunk_start, src) = skip_while(chunk_start, src, &mut masks, MaskId::Ident);
                     let len = src.offset_from_unsigned(token_start);
                     out = write_token(out, TokenKind::Ident, len as u32);
                 }
