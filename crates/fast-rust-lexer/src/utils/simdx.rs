@@ -1,9 +1,6 @@
-use std::arch::aarch64::{
-    uint8x16_t, uint8x16x2_t, uint8x16x4_t, vandq_u8, vget_lane_u64, vgetq_lane_u16,
-    vgetq_lane_u32, vgetq_lane_u64, vld4q_u8, vreinterpret_u64_u8, vreinterpretq_u16_u8,
-    vreinterpretq_u32_u8, vreinterpretq_u64_u8, vshrn_n_u16,
-};
-use std::ptr;
+#![allow(clippy::wildcard_imports)]
+
+use std::arch::aarch64::*;
 use std::simd::prelude::*;
 
 pub fn eq<const N: usize>(vec: Simd<u8, N>, byte: u8) -> Mask<i8, N> {
@@ -22,11 +19,14 @@ const POWERS_OF_2: Simd<u8, 16> = Simd::from_array([
 
 #[allow(improper_ctypes)]
 unsafe extern "C" {
-    #[link_name = "llvm.aarch64.neon.vsri.v16i8"]
-    fn vsriq_n_u8(a: uint8x16_t, b: uint8x16_t, c: u32) -> uint8x16_t;
-
     #[link_name = "llvm.aarch64.neon.addp.v16i8"]
-    fn vpaddq_u8(a: uint8x16_t, b: uint8x16_t) -> uint8x16_t;
+    pub fn vpaddq_u8(a: uint8x16_t, b: uint8x16_t) -> uint8x16_t;
+
+    #[link_name = "llvm.aarch64.neon.vsri.v16i8"]
+    pub fn vsriq_n_u8(a: uint8x16_t, b: uint8x16_t, c: u32) -> uint8x16_t;
+
+    #[link_name = "llvm.aarch64.neon.ld4.v16i8"]
+    pub fn vld4q_u8(ptr: *const u8) -> uint8x16x4_t;
 }
 
 #[inline]
@@ -74,9 +74,9 @@ fn movemask64(mask: Mask<i8, 64>) -> u64 {
 }
 
 #[inline]
-pub fn movemask_interleaved64(mask: &Mask<i8, 64>) -> u64 {
+pub fn movemask_interleaved64(mask: Mask<i8, 64>) -> u64 {
     unsafe {
-        let uint8x16x4_t(v0, v1, v2, v3) = vld4q_u8(ptr::from_ref(mask).cast());
+        let uint8x16x4_t(v0, v1, v2, v3) = std::mem::transmute::<Mask<i8, 64>, uint8x16x4_t>(mask);
         let t0 = vsriq_n_u8(v1, v0, 1);
         let t1 = vsriq_n_u8(v3, v2, 1);
         let t2 = vsriq_n_u8(t1, t0, 2);
@@ -93,8 +93,19 @@ pub fn movemask<const N: usize>(mask: Mask<i8, N>) -> u64 {
         8 => u64::from(movemask8(mask.resize::<8>(false))),
         16 => u64::from(movemask16(mask.resize::<16>(false))),
         32 => u64::from(movemask32(mask.resize::<32>(false))),
-        64 => movemask64(mask.resize::<64>(false)),
+        // 64 => movemask64(mask.resize::<64>(false)),
+        64 => movemask_interleaved64(mask.resize::<64>(false)),
         _ => panic!("Unsupported vector length"),
+    }
+}
+
+#[inline]
+pub fn first_set<const N: usize>(mask: Mask<i8, N>) -> Option<usize> {
+    let mask = movemask(mask);
+    if mask == 0 {
+        None
+    } else {
+        Some(mask.trailing_zeros() as usize)
     }
 }
 
@@ -126,14 +137,18 @@ fn check_movemask32() {
 fn check_movemask64() {
     for i in 0..64 {
         let mask: Mask<i8, 64> = Mask::from_bitmask(1 << i);
-        assert_eq!(movemask(mask), mask.to_bitmask());
+        assert_eq!(movemask64(mask), mask.to_bitmask());
     }
 }
 
 #[test]
 fn check_movemask_interleaved64() {
-    for i in 0..64 {
-        let mask: Mask<i8, 64> = Mask::from_bitmask(1 << i);
-        assert_eq!(movemask_interleaved64(&mask), mask.to_bitmask());
+    unsafe {
+        for i in 0..64 {
+            let mask: Mask<i8, 64> = Mask::from_bitmask(1 << i);
+            let neon = vld4q_u8((&raw const mask).cast::<u8>());
+            let rust = std::mem::transmute::<uint8x16x4_t, Mask<i8, 64>>(neon);
+            assert_eq!(movemask_interleaved64(rust), mask.to_bitmask());
+        }
     }
 }

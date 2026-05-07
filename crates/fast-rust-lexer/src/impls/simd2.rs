@@ -1,6 +1,9 @@
+use std::arch::aarch64::uint8x16x4_t;
 use std::simd::prelude::*;
 
 use crate::TokenKind;
+use crate::utils::bitstring::BitString;
+use crate::utils::simdx::*;
 use crate::utils::write_and_advance;
 
 pub const EOF_BYTE: u8 = 0xFF;
@@ -18,6 +21,20 @@ unsafe fn write_punct(out: *mut u8, kind: TokenKind) -> *mut u8 {
     unsafe { write_and_advance(out, kind as u8) }
 }
 
+#[must_use]
+#[inline]
+unsafe fn load<const VEC_LEN: usize>(ptr: *const u8) -> Simd<u8, VEC_LEN> {
+    unsafe {
+        match VEC_LEN {
+            16 => ptr.cast::<Simd<u8, 16>>().read_unaligned().resize(0),
+            32 => ptr.cast::<Simd<u8, 32>>().read_unaligned().resize(0),
+            // 64 => ptr.cast::<Simd<u8, 64>>().read_unaligned().resize(0),
+            64 => std::mem::transmute::<uint8x16x4_t, Simd<u8, 64>>(vld4q_u8(ptr)).resize(0),
+            _ => unreachable!(),
+        }
+    }
+}
+
 pub fn lex<'out, const VEC_LEN: usize>(src: &[u8], out: &'out mut [u8]) -> &'out mut [u8] {
     unsafe {
         debug_assert!(src.ends_with([[EOF_BYTE; VEC_LEN]; 2].as_flattened()));
@@ -30,128 +47,161 @@ pub fn lex<'out, const VEC_LEN: usize>(src: &[u8], out: &'out mut [u8]) -> &'out
     }
 }
 
+pub fn lex_16<'out>(src: &[u8], out: &'out mut [u8]) -> &'out mut [u8] { lex::<16>(src, out) }
+pub fn lex_32<'out>(src: &[u8], out: &'out mut [u8]) -> &'out mut [u8] { lex::<32>(src, out) }
+pub fn lex_64<'out>(src: &[u8], out: &'out mut [u8]) -> &'out mut [u8] { lex::<64>(src, out) }
+
+fn whitespace_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
+    let mask = eq(vec, b' ') | eq(vec, b'\n') | eq(vec, b'\t');
+    BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
+}
+
+fn newline_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
+    let mask = eq(vec, b'\n');
+    BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
+}
+
+fn ident_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
+    let mask = eq(vec, b'_')
+        | in_range(vec, b'a', b'z')
+        | in_range(vec, b'A', b'Z')
+        | in_range(vec, b'0', b'9');
+    BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
+}
+
+#[derive(Debug, Copy, Clone)]
+enum Mask {
+    Whitespace,
+    Newline,
+    Ident,
+}
+
+#[derive(Copy, Clone)]
+struct Masks<const VEC_LEN: usize> {
+    whitespace: BitString<VEC_LEN>,
+    newline:    BitString<VEC_LEN>,
+    ident:      BitString<VEC_LEN>,
+}
+
+impl<const VEC_LEN: usize> Masks<VEC_LEN> {
+    pub fn new(vec: Simd<u8, VEC_LEN>) -> Self {
+        Self {
+            whitespace: whitespace_bitstring(vec),
+            newline:    newline_bitstring(vec),
+            ident:      ident_bitstring(vec),
+        }
+    }
+}
+
+impl<const VEC_LEN: usize> std::ops::Index<Mask> for Masks<VEC_LEN> {
+    type Output = BitString<VEC_LEN>;
+    fn index(&self, index: Mask) -> &Self::Output {
+        match index {
+            Mask::Whitespace => &self.whitespace,
+            Mask::Newline => &self.newline,
+            Mask::Ident => &self.ident,
+        }
+    }
+}
+
+impl<const VEC_LEN: usize> std::ops::IndexMut<Mask> for Masks<VEC_LEN> {
+    fn index_mut(&mut self, index: Mask) -> &mut Self::Output {
+        match index {
+            Mask::Whitespace => &mut self.whitespace,
+            Mask::Newline => &mut self.newline,
+            Mask::Ident => &mut self.ident,
+        }
+    }
+}
+
+unsafe fn skip_while<const VEC_LEN: usize>(
+    mut chunk_start: *const u8,
+    mut src: *const u8,
+    masks: &mut Masks<VEC_LEN>,
+    mask: Mask,
+) -> (*const u8, *const u8) {
+    unsafe {
+        loop {
+            let chunk_consumed = src.offset_from_unsigned(chunk_start);
+            let len = (masks[mask] << chunk_consumed).leading_ones();
+            src = src.add(len);
+
+            let next_chunk = chunk_start.add(VEC_LEN);
+            if src < next_chunk {
+                return (chunk_start, src);
+            }
+
+            chunk_start = next_chunk;
+            src = chunk_start;
+            let vec = load::<VEC_LEN>(chunk_start);
+            *masks = Masks::new(vec);
+        }
+    }
+}
+
+unsafe fn skip_until<const VEC_LEN: usize>(
+    mut chunk_start: *const u8,
+    mut src: *const u8,
+    src_end: *const u8,
+    masks: &mut Masks<VEC_LEN>,
+    mask: Mask,
+) -> (*const u8, *const u8) {
+    unsafe {
+        loop {
+            let chunk_consumed = src.offset_from_unsigned(chunk_start);
+            let len = (masks[mask] << chunk_consumed).leading_zeros();
+            src = src.add(len);
+
+            let next_chunk = chunk_start.add(VEC_LEN);
+            if src < next_chunk {
+                return (chunk_start, src);
+            }
+            if src >= src_end {
+                return (src_end, src_end);
+            }
+
+            chunk_start = next_chunk;
+            src = chunk_start;
+            let vec = load::<VEC_LEN>(chunk_start);
+            *masks = Masks::new(vec);
+        }
+    }
+}
+
 unsafe fn lex_loop<const VEC_LEN: usize>(
     mut src: *const u8,
     src_end: *const u8,
     mut out: *mut u8,
 ) -> *mut u8 {
     unsafe {
+        debug_assert_eq!(src_end.read(), EOF_BYTE);
+
+        let mut chunk_start = src;
+        let mut masks = Masks::new(load::<VEC_LEN>(chunk_start));
+
         loop {
             let token_start = src;
             let byte = src.read();
             debug_assert!(src <= src_end);
+
+            if src.offset_from_unsigned(chunk_start) >= VEC_LEN {
+                chunk_start = src;
+                let vec = load::<VEC_LEN>(chunk_start);
+                masks = Masks::new(vec);
+            }
+
             match byte {
-                b'(' => {
-                    out = write_punct(out, TokenKind::LParen);
-                    src = src.add(1);
-                }
-                b')' => {
-                    out = write_punct(out, TokenKind::RParen);
-                    src = src.add(1);
-                }
-                b'[' => {
-                    out = write_punct(out, TokenKind::LSquare);
-                    src = src.add(1);
-                }
-                b']' => {
-                    out = write_punct(out, TokenKind::RSquare);
-                    src = src.add(1);
-                }
-                b'{' => {
-                    out = write_punct(out, TokenKind::LCurly);
-                    src = src.add(1);
-                }
-                b'}' => {
-                    out = write_punct(out, TokenKind::RCurly);
-                    src = src.add(1);
-                }
-                b',' => {
-                    out = write_punct(out, TokenKind::Comma);
-                    src = src.add(1);
-                }
-                b';' => {
-                    out = write_punct(out, TokenKind::Semicolon);
-                    src = src.add(1);
-                }
-                b':' => {
-                    out = write_punct(out, TokenKind::Colon);
-                    src = src.add(1);
-                }
-                b'+' => {
-                    out = write_punct(out, TokenKind::Plus);
-                    src = src.add(1);
-                }
-                b'-' => {
-                    out = write_punct(out, TokenKind::Minus);
-                    src = src.add(1);
-                }
-                b'*' => {
-                    out = write_punct(out, TokenKind::Star);
-                    src = src.add(1);
-                }
-                b'%' => {
-                    out = write_punct(out, TokenKind::Percent);
-                    src = src.add(1);
-                }
-                b'=' => {
-                    out = write_punct(out, TokenKind::Eq);
-                    src = src.add(1);
-                }
-                b'&' => {
-                    out = write_punct(out, TokenKind::Ampersand);
-                    src = src.add(1);
-                }
-                b'|' => {
-                    out = write_punct(out, TokenKind::Bar);
-                    src = src.add(1);
-                }
-                b'$' => {
-                    out = write_punct(out, TokenKind::Dollar);
-                    src = src.add(1);
-                }
-                b'?' => {
-                    out = write_punct(out, TokenKind::Question);
-                    src = src.add(1);
-                }
-                b'~' => {
-                    out = write_punct(out, TokenKind::Tilde);
-                    src = src.add(1);
-                }
-                b'#' => {
-                    out = write_punct(out, TokenKind::Hash);
-                    src = src.add(1);
-                }
-                b'@' => {
-                    out = write_punct(out, TokenKind::At);
-                    src = src.add(1);
-                }
-                b'.' => {
-                    out = write_punct(out, TokenKind::Dot);
-                    src = src.add(1);
-                }
-                b'!' => {
-                    out = write_punct(out, TokenKind::Bang);
-                    src = src.add(1);
-                }
-                b'>' => {
-                    out = write_punct(out, TokenKind::Gt);
-                    src = src.add(1);
-                }
-                b'<' => {
-                    out = write_punct(out, TokenKind::Lt);
-                    src = src.add(1);
-                }
-                b'^' => {
-                    out = write_punct(out, TokenKind::Caret);
+                | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+' | b'-'
+                | b'*' | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@' | b'.'
+                | b'!' | b'>' | b'<' | b'^' => {
+                    out = write_punct(out, TokenKind::from_u8(byte).unwrap_unchecked());
                     src = src.add(1);
                 }
 
                 b'/' => match src.add(1).read() {
                     b'/' => {
-                        src = src.add(2);
-                        while !matches!(src.read(), b'\n' | EOF_BYTE) {
-                            src = src.add(1);
-                        }
+                        (chunk_start, src) =
+                            skip_until(chunk_start, src, src_end, &mut masks, Mask::Newline);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::LineComment, len as u32);
                     }
@@ -184,103 +234,101 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                     }
                 },
 
-                b' ' | b'\n' | b'\t' => {
-                    src = src.add(1);
-                    while let b' ' | b'\n' | b'\t' = src.read() {
-                        src = src.add(1);
-                    }
-                    let len = src.offset_from_unsigned(token_start);
-                    out = write_token(out, TokenKind::Whitespace, len as u32);
-                }
-
                 b'\'' => {
                     let kind;
-                    (kind, src) = char_or_lifetime::<VEC_LEN>(src);
+                    (kind, src) = eat_char_or_lifetime::<VEC_LEN>(src);
                     let len = src.offset_from_unsigned(token_start);
                     out = write_token(out, kind, len as u32);
                 }
                 b'\"' => {
-                    src = double_quote_string::<VEC_LEN>(src, src_end);
+                    src = eat_double_quote_string::<VEC_LEN>(src, src_end);
                     let len = src.offset_from_unsigned(token_start);
                     out = write_token(out, TokenKind::Str, len as u32);
                 }
                 b'b' => match src.add(1).cast::<[u8; 2]>().read() {
                     [b'r', b'#'] => {
-                        src = hash_string::<VEC_LEN>(src.add(2), src_end);
+                        src = eat_hash_string::<VEC_LEN>(src.add(2), src_end);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawByteStr, len as u32);
                     }
                     [b'r', b'"'] => {
-                        src = raw_string::<VEC_LEN>(src.add(2), src_end);
+                        src = eat_raw_string::<VEC_LEN>(src.add(2), src_end);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawByteStr, len as u32);
                     }
                     [b'"', ..] => {
-                        src = double_quote_string::<VEC_LEN>(src.add(1), src_end);
+                        src = eat_double_quote_string::<VEC_LEN>(src.add(1), src_end);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::ByteStr, len as u32);
                     }
                     [b'\'', ..] => {
-                        src = single_quote_string::<VEC_LEN>(src.add(1));
+                        src = eat_single_quote_string::<VEC_LEN>(src.add(1));
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::Byte, len as u32);
                     }
                     _ => {
-                        src = ident::<VEC_LEN>(src.add(1));
+                        src = eat_ident::<VEC_LEN>(src.add(1));
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::Ident, len as u32);
                     }
                 },
                 b'c' => match src.add(1).cast::<[u8; 2]>().read() {
                     [b'r', b'#'] => {
-                        src = hash_string::<VEC_LEN>(src.add(2), src_end);
+                        src = eat_hash_string::<VEC_LEN>(src.add(2), src_end);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawCStr, len as u32);
                     }
                     [b'r', b'"'] => {
-                        src = raw_string::<VEC_LEN>(src.add(2), src_end);
+                        src = eat_raw_string::<VEC_LEN>(src.add(2), src_end);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawCStr, len as u32);
                     }
                     [b'"', ..] => {
-                        src = double_quote_string::<VEC_LEN>(src.add(1), src_end);
+                        src = eat_double_quote_string::<VEC_LEN>(src.add(1), src_end);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::CStr, len as u32);
                     }
                     _ => {
-                        src = ident::<VEC_LEN>(src.add(1));
+                        src = eat_ident::<VEC_LEN>(src.add(1));
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::Ident, len as u32);
                     }
                 },
                 b'r' => match src.add(1).cast::<[u8; 2]>().read() {
                     [b'"', ..] => {
-                        src = raw_string::<VEC_LEN>(src.add(1), src_end);
+                        src = eat_raw_string::<VEC_LEN>(src.add(1), src_end);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawStr, len as u32);
                     }
                     [b'#', b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
-                        src = ident::<VEC_LEN>(src.add(2));
+                        src = eat_ident::<VEC_LEN>(src.add(2));
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawIdent, len as u32);
                     }
                     [b'#', ..] => {
-                        src = hash_string::<VEC_LEN>(src.add(1), src_end);
+                        src = eat_hash_string::<VEC_LEN>(src.add(1), src_end);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawStr, len as u32);
                     }
                     _ => {
-                        src = ident::<VEC_LEN>(src.add(1));
+                        src = eat_ident::<VEC_LEN>(src.add(1));
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::Ident, len as u32);
                     }
                 },
 
+                b' ' | b'\n' | b'\t' => {
+                    (chunk_start, src) = skip_while(chunk_start, src, &mut masks, Mask::Whitespace);
+                    let len = src.offset_from_unsigned(token_start);
+                    out = write_token(out, TokenKind::Whitespace, len as u32);
+                }
+
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                    src = ident::<VEC_LEN>(src.add(1));
+                    (chunk_start, src) = skip_while(chunk_start, src, &mut masks, Mask::Ident);
                     let len = src.offset_from_unsigned(token_start);
                     out = write_token(out, TokenKind::Ident, len as u32);
                 }
+
                 b'0'..=b'9' => {
                     src = src.add(1);
                     while let b'0'..=b'9' | b'_' = src.read() {
@@ -330,14 +378,17 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
 }
 
 #[inline]
-fn double_quote_string<const VEC_LEN: usize>(mut src: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_double_quote_string<const VEC_LEN: usize>(
+    mut src: *const u8,
+    src_end: *const u8,
+) -> *const u8 {
     unsafe {
         debug_assert_eq!(src.read(), b'"');
         src = src.add(1);
         loop {
-            let vec = src.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let vec = load::<VEC_LEN>(src);
             let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            if let Some(off) = quote_mask.first_set() {
+            if let Some(off) = first_set(quote_mask) {
                 src = src.add(off).add(1);
                 let mut backslashes = 0;
                 let mut cur_back = src.sub(2);
@@ -360,15 +411,15 @@ fn double_quote_string<const VEC_LEN: usize>(mut src: *const u8, src_end: *const
 }
 
 #[inline]
-fn raw_string<const VEC_LEN: usize>(mut src: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_raw_string<const VEC_LEN: usize>(mut src: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         debug_assert_eq!(src.sub(1).read(), b'r');
         debug_assert_eq!(src.read(), b'"');
         src = src.add(1);
         loop {
-            let vec = src.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let vec = load::<VEC_LEN>(src);
             let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            if let Some(off) = quote_mask.first_set() {
+            if let Some(off) = first_set(quote_mask) {
                 return src.add(off).add(1);
             }
 
@@ -381,16 +432,16 @@ fn raw_string<const VEC_LEN: usize>(mut src: *const u8, src_end: *const u8) -> *
 }
 
 #[inline]
-fn ident<const VEC_LEN: usize>(mut src: *const u8) -> *const u8 {
+fn eat_ident<const VEC_LEN: usize>(mut src: *const u8) -> *const u8 {
     unsafe {
         loop {
-            let vec = src.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let vec = load::<VEC_LEN>(src);
             let mask = (vec.simd_eq(Simd::splat(b'_')))
                 | (Simd::splat(b'a').simd_le(vec) & vec.simd_le(Simd::splat(b'z')))
                 | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
                 | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')));
 
-            if let Some(off) = (!mask).first_set() {
+            if let Some(off) = first_set(!mask) {
                 return src.add(off);
             }
 
@@ -400,11 +451,11 @@ fn ident<const VEC_LEN: usize>(mut src: *const u8) -> *const u8 {
 }
 
 #[inline]
-fn char_or_lifetime<const VEC_LEN: usize>(src: *const u8) -> (TokenKind, *const u8) {
+fn eat_char_or_lifetime<const VEC_LEN: usize>(src: *const u8) -> (TokenKind, *const u8) {
     unsafe {
         let mut src = src.add(1);
         if let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = src.read() {
-            src = ident::<VEC_LEN>(src);
+            src = eat_ident::<VEC_LEN>(src);
             match src.read() {
                 b'\'' => return (TokenKind::Char, src.add(1)),
                 _ => return (TokenKind::Lifetime, src),
@@ -412,11 +463,11 @@ fn char_or_lifetime<const VEC_LEN: usize>(src: *const u8) -> (TokenKind, *const 
         }
     }
 
-    (TokenKind::Char, single_quote_string::<VEC_LEN>(src))
+    (TokenKind::Char, eat_single_quote_string::<VEC_LEN>(src))
 }
 
 #[inline]
-fn single_quote_string<const VEC_LEN: usize>(token_start: *const u8) -> *const u8 {
+fn eat_single_quote_string<const VEC_LEN: usize>(token_start: *const u8) -> *const u8 {
     unsafe {
         debug_assert_eq!(token_start.read(), b'\'');
         let mut src = token_start.add(1);
@@ -435,7 +486,7 @@ fn single_quote_string<const VEC_LEN: usize>(token_start: *const u8) -> *const u
 }
 
 #[inline]
-fn hash_string<const VEC_LEN: usize>(mut cur: *const u8, src_end: *const u8) -> *const u8 {
+fn eat_hash_string<const VEC_LEN: usize>(mut cur: *const u8, src_end: *const u8) -> *const u8 {
     unsafe {
         debug_assert_eq!(cur.sub(1).read(), b'r');
         debug_assert_eq!(cur.read(), b'#');
@@ -452,9 +503,9 @@ fn hash_string<const VEC_LEN: usize>(mut cur: *const u8, src_end: *const u8) -> 
         cur = cur.add(1);
 
         loop {
-            let vec = cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
+            let vec = load::<VEC_LEN>(cur);
             let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            if let Some(off) = quote_mask.first_set() {
+            if let Some(off) = first_set(quote_mask) {
                 cur = cur.add(off).add(1);
                 let mut num_hashes = num_hashes;
                 while cur.read() == b'#' {
@@ -510,8 +561,6 @@ mod tests {
             decoded.push((kind, pos..end));
             pos = end;
         }
-
-        dbg!(&decoded);
 
         let mut out = String::new();
         for (kind, range) in decoded {

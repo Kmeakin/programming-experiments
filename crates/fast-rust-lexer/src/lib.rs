@@ -1,13 +1,14 @@
 #![feature(
+    bstr,
     explicit_tail_calls,
+    iter_next_chunk,
     link_llvm_intrinsics,
     portable_simd,
     rust_preserve_none_cc,
     simd_ffi,
     slice_from_ptr_range
 )]
-#![cfg_attr(test, feature(iter_next_chunk, bstr))]
-#![allow(incomplete_features, internal_features)]
+#![allow(unused_features, incomplete_features, internal_features)]
 
 pub mod impls;
 pub mod utils;
