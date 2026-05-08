@@ -78,6 +78,11 @@ fn ident_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VE
     BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
 }
 
+fn digits_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
+    let mask = eq(vec, b'_') | in_range(vec, b'0', b'9');
+    BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
+}
+
 fn double_quote_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
     let mask = eq(vec, b'"');
     BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
@@ -88,6 +93,7 @@ enum MaskId {
     Whitespace,
     Newline,
     Ident,
+    Digits,
     DoubleQuote,
 }
 
@@ -96,6 +102,7 @@ struct Masks<const VEC_LEN: usize> {
     whitespace:   BitString<VEC_LEN>,
     newline:      BitString<VEC_LEN>,
     ident:        BitString<VEC_LEN>,
+    digits:       BitString<VEC_LEN>,
     double_quote: BitString<VEC_LEN>,
 }
 
@@ -105,6 +112,7 @@ impl<const VEC_LEN: usize> Masks<VEC_LEN> {
             whitespace:   whitespace_bitstring(vec),
             newline:      newline_bitstring(vec),
             ident:        ident_bitstring(vec),
+            digits:       digits_bitstring(vec),
             double_quote: double_quote_bitstring(vec),
         }
     }
@@ -115,6 +123,7 @@ fn get_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, id: MaskId) -> Bi
         MaskId::Whitespace => whitespace_bitstring(vec),
         MaskId::Newline => newline_bitstring(vec),
         MaskId::Ident => ident_bitstring(vec),
+        MaskId::Digits => digits_bitstring(vec),
         MaskId::DoubleQuote => double_quote_bitstring(vec),
     }
 }
@@ -126,6 +135,7 @@ impl<const VEC_LEN: usize> std::ops::Index<MaskId> for Masks<VEC_LEN> {
             MaskId::Whitespace => &self.whitespace,
             MaskId::Newline => &self.newline,
             MaskId::Ident => &self.ident,
+            MaskId::Digits => &self.digits,
             MaskId::DoubleQuote => &self.double_quote,
         }
     }
@@ -137,6 +147,7 @@ impl<const VEC_LEN: usize> std::ops::IndexMut<MaskId> for Masks<VEC_LEN> {
             MaskId::Whitespace => &mut self.whitespace,
             MaskId::Newline => &mut self.newline,
             MaskId::Ident => &mut self.ident,
+            MaskId::Digits => &mut self.digits,
             MaskId::DoubleQuote => &mut self.double_quote,
         }
     }
@@ -418,10 +429,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 }
 
                 b'0'..=b'9' => {
-                    src = src.add(1);
-                    while let b'0'..=b'9' | b'_' = src.read() {
-                        src = src.add(1);
-                    }
+                    (chunk_start, src) = skip_while(chunk_start, src, &mut masks, MaskId::Digits);
                     let mut kind = match (src.read(), src.add(1).read()) {
                         (b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => {
                             let len = src.offset_from_unsigned(token_start);

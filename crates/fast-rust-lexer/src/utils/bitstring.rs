@@ -25,6 +25,7 @@ impl<const BITS: usize> fmt::Debug for BitString<BITS> {
 
 impl<const BITS: usize> ops::Shl<usize> for BitString<BITS> {
     type Output = Self;
+    #[track_caller]
     fn shl(self, amount: usize) -> Self::Output {
         debug_assert!(amount <= BITS, "amount = {amount}, BITS = {BITS}");
         Self {
