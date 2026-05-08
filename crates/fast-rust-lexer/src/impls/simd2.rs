@@ -1,4 +1,5 @@
 use std::arch::aarch64::{uint8x16x4_t, uint16x4x2_t, uint16x8x2_t, vld2_u16, vld2q_u16};
+use std::ops::ControlFlow;
 use std::simd::prelude::*;
 
 use crate::TokenKind;
@@ -190,7 +191,7 @@ unsafe fn skip_until<const VEC_LEN: usize>(
     src_end: *const u8,
     masks: &mut Masks<VEC_LEN>,
     id: MaskId,
-) -> (*const u8, *const u8) {
+) -> Result<(*const u8, *const u8), *const u8> {
     unsafe {
         let chunk_consumed = src.offset_from_unsigned(chunk_start);
         let len = (masks[id] << chunk_consumed).leading_zeros();
@@ -198,7 +199,7 @@ unsafe fn skip_until<const VEC_LEN: usize>(
 
         let mut next_chunk = chunk_start.add(VEC_LEN);
         if src < next_chunk {
-            return (chunk_start, src);
+            return Ok((chunk_start, src));
         }
 
         loop {
@@ -209,12 +210,12 @@ unsafe fn skip_until<const VEC_LEN: usize>(
             if len < VEC_LEN {
                 let src = chunk_start.add(len);
                 *masks = Masks::new(vec);
-                return (chunk_start, src);
+                return Ok((chunk_start, src));
             }
 
             next_chunk = chunk_start.add(VEC_LEN);
             if next_chunk >= src_end {
-                return (src_end, src_end);
+                return Err(src_end);
             }
         }
     }
@@ -257,7 +258,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
         let mut masks = Masks::new(load::<VEC_LEN>(chunk_start));
 
         loop {
-            let token_start = src;
+            let mut token_start = src;
             let byte = src.read();
             debug_assert!(src <= src_end.add(VEC_LEN));
 
@@ -284,10 +285,19 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
 
                 b'/' => match src.add(1).read() {
                     b'/' => {
-                        (chunk_start, src) =
-                            skip_until(chunk_start, src, src_end, &mut masks, MaskId::Newline);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::LineComment, len as u32);
+                        match skip_until(chunk_start, src, src_end, &mut masks, MaskId::Newline) {
+                            Ok(ok) => {
+                                (chunk_start, src) = ok;
+                                let len = src.offset_from_unsigned(token_start);
+                                out = write_token(out, TokenKind::LineComment, len as u32);
+                            }
+                            Err(src_end) => {
+                                src = src_end;
+                                let len = src.offset_from_unsigned(token_start);
+                                out = write_token(out, TokenKind::LineComment, len as u32);
+                                return out;
+                            }
+                        }
                     }
                     b'*' => {
                         let mut depth = 1u32;
@@ -337,8 +347,16 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                     }
                     [b'r', b'"'] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 3);
-                        (chunk_start, src) =
-                            skip_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote);
+                        match skip_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote)
+                        {
+                            Ok(ok) => (chunk_start, src) = ok,
+                            Err(src_end) => {
+                                src = src_end;
+                                let len = src.offset_from_unsigned(token_start);
+                                out = write_token(out, TokenKind::RawByteStr, len as u32);
+                                return out;
+                            }
+                        }
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 1);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawByteStr, len as u32);
@@ -368,8 +386,16 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                     }
                     [b'r', b'"'] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 3);
-                        (chunk_start, src) =
-                            skip_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote);
+                        match skip_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote)
+                        {
+                            Ok(ok) => (chunk_start, src) = ok,
+                            Err(src_end) => {
+                                src = src_end;
+                                let len = src.offset_from_unsigned(token_start);
+                                out = write_token(out, TokenKind::RawCStr, len as u32);
+                                return out;
+                            }
+                        }
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 1);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawCStr, len as u32);
@@ -389,8 +415,16 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 b'r' => match src.add(1).cast::<[u8; 2]>().read() {
                     [b'"', ..] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 2);
-                        (chunk_start, src) =
-                            skip_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote);
+                        match skip_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote)
+                        {
+                            Ok(ok) => (chunk_start, src) = ok,
+                            Err(src_end) => {
+                                src = src_end;
+                                let len = src.offset_from_unsigned(token_start);
+                                out = write_token(out, TokenKind::RawStr, len as u32);
+                                return out;
+                            }
+                        }
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 1);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawStr, len as u32);
