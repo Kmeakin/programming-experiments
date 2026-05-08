@@ -1,4 +1,4 @@
-use std::arch::aarch64::uint8x16x4_t;
+use std::arch::aarch64::{uint8x16x4_t, uint16x4x2_t, uint16x8x2_t, vld2_u16, vld2q_u16};
 use std::simd::prelude::*;
 
 use crate::TokenKind;
@@ -26,9 +26,18 @@ unsafe fn write_punct(out: *mut u8, kind: TokenKind) -> *mut u8 {
 unsafe fn load<const VEC_LEN: usize>(ptr: *const u8) -> Simd<u8, VEC_LEN> {
     unsafe {
         match VEC_LEN {
+            #[cfg(false)]
             16 => ptr.cast::<Simd<u8, 16>>().read_unaligned().resize(0),
+            16 => std::mem::transmute::<uint16x4x2_t, Simd<u8, 16>>(vld2_u16(ptr.cast::<u16>()))
+                .resize(0),
+
+            #[cfg(false)]
             32 => ptr.cast::<Simd<u8, 32>>().read_unaligned().resize(0),
-            // 64 => ptr.cast::<Simd<u8, 64>>().read_unaligned().resize(0),
+            32 => std::mem::transmute::<uint16x8x2_t, Simd<u8, 32>>(vld2q_u16(ptr.cast::<u16>()))
+                .resize(0),
+
+            #[cfg(false)]
+            64 => ptr.cast::<Simd<u8, 64>>().read_unaligned().resize(0),
             64 => std::mem::transmute::<uint8x16x4_t, Simd<u8, 64>>(vld4q_u8(ptr)).resize(0),
             _ => unreachable!(),
         }

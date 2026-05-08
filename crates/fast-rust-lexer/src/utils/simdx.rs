@@ -45,6 +45,21 @@ fn movemask16(mask: Mask<i8, 16>) -> u16 {
 }
 
 #[inline]
+pub fn movemask_interleaved16(mask: Mask<i8, 16>) -> u16 {
+    unsafe {
+        let uint16x4x2_t(v0, v1) = std::mem::transmute::<Mask<i8, 16>, uint16x4x2_t>(mask);
+        let t0 = vshrn_n_u16(vcombine_u16(v0, vdup_n_u16(0)), 7);
+        let t1 = vshrn_n_u16(vcombine_u16(v1, vdup_n_u16(0)), 7);
+        let t2 = vsli_n_u8(t0, t1, 2);
+        let t3 = vsli_n_u8(t2, t2, 4);
+        let t4 = vcombine_u8(t3, vdup_n_u8(0));
+        let t5 = vreinterpretq_u16_u8(t4);
+        let t6 = vshrn_n_u16(t5, 4);
+        vget_lane_u16(vreinterpret_u16_u8(t6), 0)
+    }
+}
+
+#[inline]
 fn movemask32(mask: Mask<i8, 32>) -> u32 {
     unsafe {
         let uint8x16x2_t(v0, v1) = std::mem::transmute::<Mask<i8, 32>, uint8x16x2_t>(mask);
@@ -73,6 +88,62 @@ fn movemask64(mask: Mask<i8, 64>) -> u64 {
     }
 }
 
+/*
+const uint16x8x2_t chunk = vld2q_u16((const uint16_t*)(const void*)src);
+const uint8x16_t chunk0 = vreinterpretq_u8_u16(chunk.val[0]);
+const uint8x16_t chunk1 = vreinterpretq_u8_u16(chunk.val[1]);
+const uint8x16_t dup = vdupq_n_u8(tag);
+const uint8x16_t cmp0 = vceqq_u8(chunk0, dup);
+const uint8x16_t cmp1 = vceqq_u8(chunk1, dup);
+const uint8x8_t t0 = vshrn_n_u16(vreinterpretq_u16_u8(cmp0), 6);
+const uint8x8_t t1 = vshrn_n_u16(vreinterpretq_u16_u8(cmp1), 6);
+const uint8x8_t res = vsli_n_u8(t0, t1, 4);
+return vget_lane_u64(vreinterpret_u64_u8(res), 0);
+// Optional AND with 0xaaaaaaaaaaaaaaaa for iterations
+
+const uint16x8x2_t chunk = vld2q_u16((const uint16_t*)(const void*)src);
+
+
+const uint8x8_t t0 = vshrn_n_u16(vreinterpretq_u16_u8(v0), 6);
+trunc(DDDDDDDDCCCCCCCC zzzzzzzzyyyyyyyy vvvvvvvvuuuuuuuu rrrrrrrrqqqqqqqq nnnnnnnnmmmmmmmm jjjjjjjjiiiiiiii ffffffffeeeeeeee bbbbbbbbaaaaaaaa >> 7)
+t0 =  DDDDDDDC zzzzzzzy vvvvvvvu rrrrrrrq nnnnnnnm jjjjjjji fffffffe bbbbbbba
+
+const uint8x8_t t1 = vshrn_n_u16(vreinterpretq_u16_u8(v1), 6);
+trunc(FFFFFFFFEEEEEEEE BBBBBBBBAAAAAAAA xxxxxxxxwwwwwwww ttttttttssssssss ppppppppoooooooo llllllllkkkkkkkk hhhhhhhhgggggggg ddddddddcccccccc >> 7)
+t1 =  FFFFFFFE BBBBBBBA xxxxxxxw ttttttts pppppppo lllllllk hhhhhhhg dddddddc
+
+    DDDDDDDC zzzzzzzy vvvvvvvu rrrrrrrq nnnnnnnm jjjjjjji fffffffe bbbbbbba
+  | FFFFFFFE BBBBBBBA xxxxxxxw ttttttts pppppppo lllllllk hhhhhhhg dddddddc << 2
+  = FFFFFEDC BBBBBAzy xxxxxwvu tttttsrq ppppponm lllllkji hhhhhgfe dddddcba
+const t2 = vsli_n_u8(t0, t1, 2);
+
+
+    FFFFFEDC BBBBBAzy xxxxxwvu tttttsrq ppppponm lllllkji hhhhhgfe dddddcba
+  | FFFFFEDC BBBBBAzy xxxxxwvu tttttsrq ppppponm lllllkji hhhhhgfe dddddcba << 4
+  = FEDCFEDC BAzyBAzy xwvuxwvu tsrqtsrq ponmponm lkjilkji hgfehgfe dcbadcba
+const t3 = vsli_n_u8(t2, t2, 4);
+
+
+  trunc(FEDCFEDCBAzyBAzy xwvuxwvutsrqtsrq ponmponmlkjilkji hgfehgfedcbadcba >> 4)
+        FEDCBAzyxwvutsrqponmlkjihgfedcba
+const t4 = vshrn_n_u16(vreinterpretq_u16_u8(t3), 4);
+*/
+
+#[inline]
+pub fn movemask_interleaved32(mask: Mask<i8, 32>) -> u32 {
+    unsafe {
+        let uint16x8x2_t(v0, v1) = std::mem::transmute::<Mask<i8, 32>, uint16x8x2_t>(mask);
+        let t0 = vshrn_n_u16(v0, 7);
+        let t1 = vshrn_n_u16(v1, 7);
+        let t2 = vsli_n_u8(t0, t1, 2);
+        let t3 = vsli_n_u8(t2, t2, 4);
+        let t4 = vcombine_u8(t3, t3);
+        let t5 = vreinterpretq_u16_u8(t4);
+        let t6 = vshrn_n_u16(t5, 4);
+        vget_lane_u32(vreinterpret_u32_u8(t6), 0)
+    }
+}
+
 #[inline]
 pub fn movemask_interleaved64(mask: Mask<i8, 64>) -> u64 {
     unsafe {
@@ -91,9 +162,17 @@ pub fn movemask_interleaved64(mask: Mask<i8, 64>) -> u64 {
 pub fn movemask<const N: usize>(mask: Mask<i8, N>) -> u64 {
     match N {
         8 => u64::from(movemask8(mask.resize::<8>(false))),
+
+        #[cfg(false)]
         16 => u64::from(movemask16(mask.resize::<16>(false))),
+        16 => u64::from(movemask_interleaved16(mask.resize::<16>(false))),
+
+        #[cfg(false)]
         32 => u64::from(movemask32(mask.resize::<32>(false))),
-        // 64 => movemask64(mask.resize::<64>(false)),
+        32 => u64::from(movemask_interleaved32(mask.resize::<32>(false))),
+
+        #[cfg(false)]
+        64 => movemask64(mask.resize::<64>(false)),
         64 => movemask_interleaved64(mask.resize::<64>(false)),
         _ => panic!("Unsupported vector length"),
     }
@@ -121,7 +200,7 @@ fn check_movemask8() {
 fn check_movemask16() {
     for i in 0..16 {
         let mask: Mask<i8, 16> = Mask::from_bitmask(1 << i);
-        assert_eq!(movemask(mask), mask.to_bitmask());
+        assert_eq!(u64::from(movemask16(mask)), mask.to_bitmask());
     }
 }
 
@@ -129,7 +208,7 @@ fn check_movemask16() {
 fn check_movemask32() {
     for i in 0..32 {
         let mask: Mask<i8, 32> = Mask::from_bitmask(1 << i);
-        assert_eq!(movemask(mask), mask.to_bitmask());
+        assert_eq!(u64::from(movemask32(mask)), mask.to_bitmask());
     }
 }
 
@@ -138,6 +217,30 @@ fn check_movemask64() {
     for i in 0..64 {
         let mask: Mask<i8, 64> = Mask::from_bitmask(1 << i);
         assert_eq!(movemask64(mask), mask.to_bitmask());
+    }
+}
+
+#[test]
+fn check_movemask_interleaved16() {
+    unsafe {
+        for i in 0..16 {
+            let mask: Mask<i8, 16> = Mask::from_bitmask(1 << i);
+            let neon = vld2_u16((&raw const mask).cast::<u16>());
+            let rust = std::mem::transmute::<uint16x4x2_t, Mask<i8, 16>>(neon);
+            assert_eq!(u64::from(movemask_interleaved16(rust)), mask.to_bitmask());
+        }
+    }
+}
+
+#[test]
+fn check_movemask_interleaved32() {
+    unsafe {
+        for i in 0..32 {
+            let mask: Mask<i8, 32> = Mask::from_bitmask(1 << i);
+            let neon = vld2q_u16((&raw const mask).cast::<u16>());
+            let rust = std::mem::transmute::<uint16x8x2_t, Mask<i8, 32>>(neon);
+            assert_eq!(u64::from(movemask_interleaved32(rust)), mask.to_bitmask());
+        }
     }
 }
 
