@@ -260,8 +260,15 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+' | b'-'
                 | b'*' | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@' | b'.'
                 | b'!' | b'>' | b'<' | b'^' => {
-                    out = write_punct(out, TokenKind::from_u8(byte).unwrap_unchecked());
-                    src = src.add(1);
+                    let mut byte = byte;
+                    loop {
+                        out = write_punct(out, TokenKind::from_u8(byte).unwrap_unchecked());
+                        src = src.add(1);
+                        byte = src.read();
+                        if !is_punct(byte) {
+                            break;
+                        }
+                    }
                 }
 
                 b'/' => match src.add(1).read() {
@@ -378,7 +385,9 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::RawStr, len as u32);
                     }
                     [b'#', b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
-                        src = eat_ident::<VEC_LEN>(src.add(2));
+                        (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 2);
+                        (chunk_start, src) =
+                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
                         let len = src.offset_from_unsigned(token_start);
                         out = write_token(out, TokenKind::RawIdent, len as u32);
                     }
@@ -453,6 +462,16 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 }
             }
         }
+    }
+}
+
+fn is_punct(b: u8) -> bool {
+    #[allow(clippy::match_like_matches_macro)]
+    match b {
+        | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+' | b'-' | b'*'
+        | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@' | b'.' | b'!' | b'>'
+        | b'<' | b'^' => true,
+        _ => false,
     }
 }
 
