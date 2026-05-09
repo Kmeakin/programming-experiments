@@ -477,12 +477,12 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
 
                 b'0'..=b'9' => {
                     (chunk_start, src) = skip_while(chunk_start, src, &mut masks, MaskId::Digits);
-                    let mut kind = match (src.read(), src.add(1).read()) {
-                        (b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => {
+                    let mut kind = match src.cast::<[u8; 2]>().read() {
+                        [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_'] => {
                             out = write_token(out, TokenKind::Int, token_start, src);
                             continue;
                         }
-                        (b'.', _) => {
+                        [b'.', _] => {
                             src = src.add(1);
                             while let b'0'..=b'9' | b'_' = src.read() {
                                 src = src.add(1);
@@ -496,9 +496,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         kind = TokenKind::Float;
                         src = src.add(1);
 
-                        if let b'+' | b'-' = src.read() {
-                            src = src.add(1);
-                        }
+                        src = src.add(usize::from(matches!(src.read(), b'+' | b'-')));
                     }
 
                     while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = src.read() {
