@@ -6,6 +6,13 @@ use crate::utils::bitstring::BitString;
 use crate::utils::simdx::*;
 use crate::utils::write_and_advance;
 
+// TODO:
+// * Port double quoted string parser to use bitmasks
+// * Port block comment parser to use bitmasks
+// * Optimize number parsing
+// * Optimize bitmask calculation using lookup tables?
+// * Optimize loop dispatch using `loop_match`?
+
 pub const EOF_BYTE: u8 = 0xFF;
 
 #[must_use]
