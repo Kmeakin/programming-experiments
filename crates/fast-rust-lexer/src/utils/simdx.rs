@@ -11,6 +11,29 @@ pub fn in_range<const N: usize>(vec: Simd<u8, N>, min: u8, max: u8) -> Mask<i8, 
     Simd::splat(min).simd_le(vec) & vec.simd_le(Simd::splat(max))
 }
 
+#[must_use]
+#[inline]
+pub unsafe fn load<const VEC_LEN: usize>(ptr: *const u8) -> Simd<u8, VEC_LEN> {
+    unsafe {
+        match VEC_LEN {
+            #[cfg(false)]
+            16 => ptr.cast::<Simd<u8, 16>>().read_unaligned().resize(0),
+            16 => std::mem::transmute::<uint16x4x2_t, Simd<u8, 16>>(vld2_u16(ptr.cast::<u16>()))
+                .resize(0),
+
+            #[cfg(false)]
+            32 => ptr.cast::<Simd<u8, 32>>().read_unaligned().resize(0),
+            32 => std::mem::transmute::<uint16x8x2_t, Simd<u8, 32>>(vld2q_u16(ptr.cast::<u16>()))
+                .resize(0),
+
+            #[cfg(false)]
+            64 => ptr.cast::<Simd<u8, 64>>().read_unaligned().resize(0),
+            64 => std::mem::transmute::<uint8x16x4_t, Simd<u8, 64>>(vld4q_u8(ptr)).resize(0),
+            _ => unreachable!(),
+        }
+    }
+}
+
 #[rustfmt::skip]
 const POWERS_OF_2: Simd<u8, 16> = Simd::from_array([
     0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,

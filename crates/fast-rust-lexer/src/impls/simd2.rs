@@ -30,29 +30,6 @@ unsafe fn write_punct(out: *mut u8, kind: TokenKind) -> *mut u8 {
     unsafe { write_and_advance(out, kind as u8) }
 }
 
-#[must_use]
-#[inline]
-unsafe fn load<const VEC_LEN: usize>(ptr: *const u8) -> Simd<u8, VEC_LEN> {
-    unsafe {
-        match VEC_LEN {
-            #[cfg(false)]
-            16 => ptr.cast::<Simd<u8, 16>>().read_unaligned().resize(0),
-            16 => std::mem::transmute::<uint16x4x2_t, Simd<u8, 16>>(vld2_u16(ptr.cast::<u16>()))
-                .resize(0),
-
-            #[cfg(false)]
-            32 => ptr.cast::<Simd<u8, 32>>().read_unaligned().resize(0),
-            32 => std::mem::transmute::<uint16x8x2_t, Simd<u8, 32>>(vld2q_u16(ptr.cast::<u16>()))
-                .resize(0),
-
-            #[cfg(false)]
-            64 => ptr.cast::<Simd<u8, 64>>().read_unaligned().resize(0),
-            64 => std::mem::transmute::<uint8x16x4_t, Simd<u8, 64>>(vld4q_u8(ptr)).resize(0),
-            _ => unreachable!(),
-        }
-    }
-}
-
 pub fn lex<'out, const VEC_LEN: usize>(src: &[u8], out: &'out mut [u8]) -> &'out mut [u8] {
     unsafe {
         debug_assert!(src.ends_with([[EOF_BYTE; VEC_LEN]; 2].as_flattened()));
