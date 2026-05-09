@@ -258,7 +258,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
         let mut masks = Masks::new(load::<VEC_LEN>(chunk_start));
 
         loop {
-            let mut token_start = src;
+            let token_start = src;
             let byte = src.read();
             debug_assert!(src <= src_end.add(VEC_LEN));
 
@@ -327,12 +327,29 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         src = src.add(1);
                     }
                 },
-
                 b'\'' => {
-                    let kind;
-                    (kind, src) = eat_char_or_lifetime::<VEC_LEN>(src);
+                    (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 1);
+                    if let b'a'..=b'z' | b'A'..=b'Z' | b'_' = src.read() {
+                        (chunk_start, src) =
+                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
+                        match src.read() {
+                            b'\'' => {
+                                (chunk_start, src) =
+                                    advance(chunk_start, src, src_end, &mut masks, 1);
+                                let len = src.offset_from_unsigned(token_start);
+                                out = write_token(out, TokenKind::Char, len as u32);
+                                continue;
+                            }
+                            _ => {
+                                let len = src.offset_from_unsigned(token_start);
+                                out = write_token(out, TokenKind::Lifetime, len as u32);
+                                continue;
+                            }
+                        }
+                    }
+                    src = eat_single_quote_string::<VEC_LEN>(src.sub(1));
                     let len = src.offset_from_unsigned(token_start);
-                    out = write_token(out, kind, len as u32);
+                    out = write_token(out, TokenKind::Char, len as u32);
                 }
                 b'\"' => {
                     src = eat_double_quote_string::<VEC_LEN>(src, src_end);
@@ -548,41 +565,6 @@ fn eat_double_quote_string<const VEC_LEN: usize>(
             }
         }
     }
-}
-
-#[inline]
-fn eat_ident<const VEC_LEN: usize>(mut src: *const u8) -> *const u8 {
-    unsafe {
-        loop {
-            let vec = load::<VEC_LEN>(src);
-            let mask = (vec.simd_eq(Simd::splat(b'_')))
-                | (Simd::splat(b'a').simd_le(vec) & vec.simd_le(Simd::splat(b'z')))
-                | (Simd::splat(b'A').simd_le(vec) & vec.simd_le(Simd::splat(b'Z')))
-                | (Simd::splat(b'0').simd_le(vec) & vec.simd_le(Simd::splat(b'9')));
-
-            if let Some(off) = first_set(!mask) {
-                return src.add(off);
-            }
-
-            src = src.add(VEC_LEN);
-        }
-    }
-}
-
-#[inline]
-fn eat_char_or_lifetime<const VEC_LEN: usize>(src: *const u8) -> (TokenKind, *const u8) {
-    unsafe {
-        let mut src = src.add(1);
-        if let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = src.read() {
-            src = eat_ident::<VEC_LEN>(src);
-            match src.read() {
-                b'\'' => return (TokenKind::Char, src.add(1)),
-                _ => return (TokenKind::Lifetime, src),
-            }
-        }
-    }
-
-    (TokenKind::Char, eat_single_quote_string::<VEC_LEN>(src))
 }
 
 #[inline]
