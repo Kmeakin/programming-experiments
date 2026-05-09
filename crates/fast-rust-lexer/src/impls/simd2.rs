@@ -9,8 +9,9 @@ use crate::utils::write_and_advance;
 pub const EOF_BYTE: u8 = 0xFF;
 
 #[must_use]
-unsafe fn write_token(out: *mut u8, kind: TokenKind, len: u32) -> *mut u8 {
+unsafe fn write_token(out: *mut u8, kind: TokenKind, start: *const u8, end: *const u8) -> *mut u8 {
     unsafe {
+        let len = end.offset_from_unsigned(start) as u32;
         debug_assert_ne!(len, 0);
         let out = write_and_advance(out, kind as u8);
         write_and_advance(out, len)
@@ -302,13 +303,11 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         match skip_until(chunk_start, src, src_end, &mut masks, MaskId::Newline) {
                             Ok(ok) => {
                                 (chunk_start, src) = ok;
-                                let len = src.offset_from_unsigned(token_start);
-                                out = write_token(out, TokenKind::LineComment, len as u32);
+                                out = write_token(out, TokenKind::LineComment, token_start, src);
                             }
                             Err(src_end) => {
                                 src = src_end;
-                                let len = src.offset_from_unsigned(token_start);
-                                out = write_token(out, TokenKind::LineComment, len as u32);
+                                out = write_token(out, TokenKind::LineComment, token_start, src);
                                 return out;
                             }
                         }
@@ -333,8 +332,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                                 _ => src = src.add(1),
                             }
                         }
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::BlockComment, len as u32);
+                        out = write_token(out, TokenKind::BlockComment, token_start, src);
                     }
                     _ => {
                         out = write_punct(out, TokenKind::Slash);
@@ -350,33 +348,26 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                             b'\'' => {
                                 (chunk_start, src) =
                                     advance(chunk_start, src, src_end, &mut masks, 1);
-                                let len = src.offset_from_unsigned(token_start);
-                                out = write_token(out, TokenKind::Char, len as u32);
+                                out = write_token(out, TokenKind::Char, token_start, src);
                             }
-                            _ => {
-                                let len = src.offset_from_unsigned(token_start);
-                                out = write_token(out, TokenKind::Lifetime, len as u32);
-                            }
+                            _ => out = write_token(out, TokenKind::Lifetime, token_start, src),
                         }
                         continue;
                     }
                     (chunk_start, src) =
                         eat_single_quote_string(chunk_start, src, src_end, &mut masks);
-                    let len = src.offset_from_unsigned(token_start);
-                    out = write_token(out, TokenKind::Char, len as u32);
+                    out = write_token(out, TokenKind::Char, token_start, src);
                 }
                 b'\"' => {
                     (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 1);
                     (chunk_start, src) =
                         eat_double_quote_string(chunk_start, src, src_end, &mut masks);
-                    let len = src.offset_from_unsigned(token_start);
-                    out = write_token(out, TokenKind::Str, len as u32);
+                    out = write_token(out, TokenKind::Str, token_start, src);
                 }
                 b'b' => match src.add(1).cast::<[u8; 2]>().read() {
                     [b'r', b'#'] => {
                         src = eat_hash_string::<VEC_LEN>(src.add(2), src_end);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::RawByteStr, len as u32);
+                        out = write_token(out, TokenKind::RawByteStr, token_start, src);
                     }
                     [b'r', b'"'] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 3);
@@ -385,41 +376,35 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                             Ok(ok) => (chunk_start, src) = ok,
                             Err(src_end) => {
                                 src = src_end;
-                                let len = src.offset_from_unsigned(token_start);
-                                out = write_token(out, TokenKind::RawByteStr, len as u32);
+                                out = write_token(out, TokenKind::RawByteStr, token_start, src);
                                 return out;
                             }
                         }
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 1);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::RawByteStr, len as u32);
+                        out = write_token(out, TokenKind::RawByteStr, token_start, src);
                     }
                     [b'"', ..] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 2);
                         (chunk_start, src) =
                             eat_double_quote_string(chunk_start, src, src_end, &mut masks);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::ByteStr, len as u32);
+                        out = write_token(out, TokenKind::ByteStr, token_start, src);
                     }
                     [b'\'', ..] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 2);
                         (chunk_start, src) =
                             eat_single_quote_string(chunk_start, src, src_end, &mut masks);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::Byte, len as u32);
+                        out = write_token(out, TokenKind::Byte, token_start, src);
                     }
                     _ => {
                         (chunk_start, src) =
                             skip_while(chunk_start, src, &mut masks, MaskId::Ident);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::Ident, len as u32);
+                        out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
                 b'c' => match src.add(1).cast::<[u8; 2]>().read() {
                     [b'r', b'#'] => {
                         src = eat_hash_string::<VEC_LEN>(src.add(2), src_end);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::RawCStr, len as u32);
+                        out = write_token(out, TokenKind::RawCStr, token_start, src);
                     }
                     [b'r', b'"'] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 3);
@@ -428,27 +413,23 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                             Ok(ok) => (chunk_start, src) = ok,
                             Err(src_end) => {
                                 src = src_end;
-                                let len = src.offset_from_unsigned(token_start);
-                                out = write_token(out, TokenKind::RawCStr, len as u32);
+                                out = write_token(out, TokenKind::RawCStr, token_start, src);
                                 return out;
                             }
                         }
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 1);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::RawCStr, len as u32);
+                        out = write_token(out, TokenKind::RawCStr, token_start, src);
                     }
                     [b'"', ..] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 2);
                         (chunk_start, src) =
                             eat_double_quote_string(chunk_start, src, src_end, &mut masks);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::CStr, len as u32);
+                        out = write_token(out, TokenKind::CStr, token_start, src);
                     }
                     _ => {
                         (chunk_start, src) =
                             skip_while(chunk_start, src, &mut masks, MaskId::Ident);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::Ident, len as u32);
+                        out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
                 b'r' => match src.add(1).cast::<[u8; 2]>().read() {
@@ -459,54 +440,46 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                             Ok(ok) => (chunk_start, src) = ok,
                             Err(src_end) => {
                                 src = src_end;
-                                let len = src.offset_from_unsigned(token_start);
-                                out = write_token(out, TokenKind::RawStr, len as u32);
+                                out = write_token(out, TokenKind::RawStr, token_start, src);
                                 return out;
                             }
                         }
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 1);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::RawStr, len as u32);
+                        out = write_token(out, TokenKind::RawStr, token_start, src);
                     }
                     [b'#', b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 2);
                         (chunk_start, src) =
                             skip_while(chunk_start, src, &mut masks, MaskId::Ident);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::RawIdent, len as u32);
+                        out = write_token(out, TokenKind::RawIdent, token_start, src);
                     }
                     [b'#', ..] => {
                         src = eat_hash_string::<VEC_LEN>(src.add(1), src_end);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::RawStr, len as u32);
+                        out = write_token(out, TokenKind::RawStr, token_start, src);
                     }
                     _ => {
                         (chunk_start, src) =
                             skip_while(chunk_start, src, &mut masks, MaskId::Ident);
-                        let len = src.offset_from_unsigned(token_start);
-                        out = write_token(out, TokenKind::Ident, len as u32);
+                        out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
 
                 b' ' | b'\n' | b'\t' => {
                     (chunk_start, src) =
                         skip_while(chunk_start, src, &mut masks, MaskId::Whitespace);
-                    let len = src.offset_from_unsigned(token_start);
-                    out = write_token(out, TokenKind::Whitespace, len as u32);
+                    out = write_token(out, TokenKind::Whitespace, token_start, src);
                 }
 
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                     (chunk_start, src) = skip_while(chunk_start, src, &mut masks, MaskId::Ident);
-                    let len = src.offset_from_unsigned(token_start);
-                    out = write_token(out, TokenKind::Ident, len as u32);
+                    out = write_token(out, TokenKind::Ident, token_start, src);
                 }
 
                 b'0'..=b'9' => {
                     (chunk_start, src) = skip_while(chunk_start, src, &mut masks, MaskId::Digits);
                     let mut kind = match (src.read(), src.add(1).read()) {
                         (b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => {
-                            let len = src.offset_from_unsigned(token_start);
-                            out = write_token(out, TokenKind::Int, len as u32);
+                            out = write_token(out, TokenKind::Int, token_start, src);
                             continue;
                         }
                         (b'.', _) => {
@@ -532,14 +505,13 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         src = src.add(1);
                     }
 
-                    let len = src.offset_from_unsigned(token_start);
-                    out = write_token(out, kind, len as u32);
+                    out = write_token(out, kind, token_start, src);
                 }
 
                 EOF_BYTE => return out,
                 _ => {
-                    out = write_token(out, TokenKind::Unknown, 1);
                     src = src.add(1);
+                    out = write_token(out, TokenKind::Unknown, token_start, src);
                 }
             }
         }
