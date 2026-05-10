@@ -27,9 +27,7 @@ unsafe fn write_token(out: *mut u8, kind: TokenKind, start: *const u8, end: *con
 }
 
 #[must_use]
-unsafe fn write_punct(out: *mut u8, kind: TokenKind) -> *mut u8 {
-    unsafe { write_and_advance(out, kind as u8) }
-}
+unsafe fn write_punct(out: *mut u8, kind: u8) -> *mut u8 { unsafe { write_and_advance(out, kind) } }
 
 pub fn lex<'out, const VEC_LEN: usize>(src: &[u8], out: &'out mut [u8]) -> &'out mut [u8] {
     unsafe {
@@ -274,7 +272,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 | b'!' | b'>' | b'<' | b'^' => {
                     let mut byte = byte;
                     loop {
-                        out = write_punct(out, TokenKind::from_u8(byte).unwrap_unchecked());
+                        out = write_punct(out, byte);
                         src = src.add(1);
                         byte = src.read();
                         if !is_punct(byte) {
@@ -320,7 +318,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::BlockComment, token_start, src);
                     }
                     _ => {
-                        out = write_punct(out, TokenKind::Slash);
+                        out = write_punct(out, b'/');
                         src = src.add(1);
                     }
                 },
