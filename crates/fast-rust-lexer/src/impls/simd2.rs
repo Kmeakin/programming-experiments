@@ -238,20 +238,10 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
 
         let mut chunk_start = src;
         let mut masks = Masks::new(load::<VEC_LEN>(chunk_start));
-        let mut prev_start = src.sub(1);
         loop {
             let token_start = src;
-            debug_assert!(token_start > prev_start, "Empty token?");
-            prev_start = token_start;
-
             let byte = src.read();
             debug_assert!(src <= src_end.add(VEC_LEN));
-
-            if src.offset_from_unsigned(chunk_start) >= VEC_LEN {
-                chunk_start = src;
-                let vec = load::<VEC_LEN>(chunk_start);
-                masks = Masks::new(vec);
-            }
 
             match byte {
                 | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+' | b'-'
