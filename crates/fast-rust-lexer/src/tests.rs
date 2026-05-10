@@ -75,9 +75,7 @@ fn lex_simd<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
 
 fn lex_simd2<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
     debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
-    let mut input = input.as_bytes().to_vec();
-    input.extend([simd::EOF_BYTE; VEC_LEN]);
-    input.extend([simd::EOF_BYTE; VEC_LEN]);
+    let input = simd2::prepare_input::<VEC_LEN>(input);
     let mut out_vec = vec![simd::EOF_BYTE; input.len() * 5];
     let out = simd2::lex::<VEC_LEN>(&input, &mut out_vec);
 

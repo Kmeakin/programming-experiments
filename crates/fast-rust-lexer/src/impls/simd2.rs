@@ -43,6 +43,21 @@ pub fn lex_16<'out>(src: &[u8], out: &'out mut [u8]) -> &'out mut [u8] { lex::<1
 pub fn lex_32<'out>(src: &[u8], out: &'out mut [u8]) -> &'out mut [u8] { lex::<32>(src, out) }
 pub fn lex_64<'out>(src: &[u8], out: &'out mut [u8]) -> &'out mut [u8] { lex::<64>(src, out) }
 
+pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> Vec<u8> {
+    unsafe {
+        let size = src.len() + VEC_LEN * 2;
+        let layout = std::alloc::Layout::from_size_align(size, VEC_LEN).unwrap();
+        let ptr = { std::alloc::alloc(layout) };
+        assert!(!ptr.is_null());
+        let mut vec = Vec::from_raw_parts(ptr, 0, size);
+        vec.extend(src.as_bytes());
+        vec.extend([EOF_BYTE; VEC_LEN]);
+        vec.extend([EOF_BYTE; VEC_LEN]);
+        assert!(vec.as_ptr().is_aligned_to(VEC_LEN));
+        vec
+    }
+}
+
 fn whitespace_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
     let mask = eq(vec, b' ') | eq(vec, b'\n') | eq(vec, b'\t');
     BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
@@ -637,9 +652,7 @@ mod tests {
 
     #[track_caller]
     fn check(src: &str, expect: &Expect) {
-        let mut input = src.as_bytes().to_vec();
-        input.extend([EOF_BYTE; VEC_LEN * 2]);
-
+        let input = prepare_input::<VEC_LEN>(src);
         let mut buf = vec![EOF_BYTE; input.len() * 10];
         let buf = lex::<VEC_LEN>(&input, &mut buf);
         let mut buf = buf.iter().copied();

@@ -6,7 +6,8 @@
     portable_simd,
     rust_preserve_none_cc,
     simd_ffi,
-    slice_from_ptr_range
+    slice_from_ptr_range,
+    pointer_is_aligned_to
 )]
 #![allow(unused_features, incomplete_features, internal_features)]
 
