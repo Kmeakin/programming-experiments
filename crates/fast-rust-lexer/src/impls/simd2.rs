@@ -438,9 +438,8 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         }
                         [b'.', _] => {
                             src = src.add(1);
-                            while let b'0'..=b'9' | b'_' = src.read() {
-                                src = src.add(1);
-                            }
+                            (chunk_start, src) =
+                                eat_while(chunk_start, src, &mut masks, MaskId::Digits);
                             TokenKind::Float
                         }
                         _ => TokenKind::Int,
@@ -449,14 +448,10 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                     if let b'e' | b'E' = src.read() {
                         kind = TokenKind::Float;
                         src = src.add(1);
-
                         src = src.add(usize::from(matches!(src.read(), b'+' | b'-')));
                     }
 
-                    while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = src.read() {
-                        src = src.add(1);
-                    }
-
+                    (chunk_start, src) = eat_while(chunk_start, src, &mut masks, MaskId::Ident);
                     out = write_token(out, kind, token_start, src);
                 }
 
