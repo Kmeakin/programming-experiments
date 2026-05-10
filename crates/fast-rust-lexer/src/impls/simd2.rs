@@ -8,7 +8,6 @@ use crate::utils::simdx::*;
 use crate::utils::write_and_advance;
 
 // TODO:
-// * Port block comment parser to use bitmasks
 // * Optimize number parsing
 // * Optimize bitmask calculation using lookup tables?
 // * Optimize loop dispatch using `loop_match`?
@@ -77,6 +76,11 @@ fn double_quote_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitSt
     BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
 }
 
+fn slash_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
+    let mask = eq(vec, b'/');
+    BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
+}
+
 #[derive(Debug, Copy, Clone)]
 enum MaskId {
     Whitespace,
@@ -85,6 +89,7 @@ enum MaskId {
     Digits,
     SingleQuote,
     DoubleQuote,
+    Slash,
 }
 
 #[derive(Copy, Clone)]
@@ -95,6 +100,7 @@ struct Masks<const VEC_LEN: usize> {
     digits:       BitString<VEC_LEN>,
     single_quote: BitString<VEC_LEN>,
     double_quote: BitString<VEC_LEN>,
+    slash:        BitString<VEC_LEN>,
 }
 
 impl<const VEC_LEN: usize> Masks<VEC_LEN> {
@@ -106,6 +112,7 @@ impl<const VEC_LEN: usize> Masks<VEC_LEN> {
             digits:       digits_bitstring(vec),
             single_quote: single_quote_bitstring(vec),
             double_quote: double_quote_bitstring(vec),
+            slash:        slash_bitstring(vec),
         }
     }
 }
@@ -118,6 +125,7 @@ fn get_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, id: MaskId) -> Bi
         MaskId::Digits => digits_bitstring(vec),
         MaskId::SingleQuote => single_quote_bitstring(vec),
         MaskId::DoubleQuote => double_quote_bitstring(vec),
+        MaskId::Slash => slash_bitstring(vec),
     }
 }
 
@@ -131,6 +139,7 @@ impl<const VEC_LEN: usize> std::ops::Index<MaskId> for Masks<VEC_LEN> {
             MaskId::Digits => &self.digits,
             MaskId::SingleQuote => &self.single_quote,
             MaskId::DoubleQuote => &self.double_quote,
+            MaskId::Slash => &self.slash,
         }
     }
 }
@@ -144,6 +153,7 @@ impl<const VEC_LEN: usize> std::ops::IndexMut<MaskId> for Masks<VEC_LEN> {
             MaskId::Digits => &mut self.digits,
             MaskId::SingleQuote => &mut self.single_quote,
             MaskId::DoubleQuote => &mut self.double_quote,
+            MaskId::Slash => &mut self.slash,
         }
     }
 }
@@ -272,25 +282,9 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         }
                     }
                     b'*' => {
-                        let mut depth = 1u32;
                         src = src.add(2);
-                        loop {
-                            match (src.read(), src.add(1).read()) {
-                                (b'/', b'*') => {
-                                    src = src.add(2);
-                                    depth += 1;
-                                }
-                                (b'*', b'/') => {
-                                    src = src.add(2);
-                                    depth -= 1;
-                                    if depth == 0 {
-                                        break;
-                                    }
-                                }
-                                (EOF_BYTE, _) => break,
-                                _ => src = src.add(1),
-                            }
-                        }
+                        (chunk_start, src) =
+                            eat_block_comment(chunk_start, src, src_end, &mut masks);
                         out = write_token(out, TokenKind::BlockComment, token_start, src);
                     }
                     _ => {
@@ -474,6 +468,43 @@ fn is_punct(b: u8) -> bool {
         | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@' | b'.' | b'!' | b'>'
         | b'<' | b'^' => true,
         _ => false,
+    }
+}
+
+#[inline(always)]
+fn eat_block_comment<const VEC_LEN: usize>(
+    mut chunk_start: *const u8,
+    mut src: *const u8,
+    src_end: *const u8,
+    masks: &mut Masks<VEC_LEN>,
+) -> (*const u8, *const u8) {
+    unsafe {
+        debug_assert_eq!(src.sub(2).cast::<[u8; 2]>().read(), [b'/', b'*']);
+        let start = src;
+
+        let mut depth = 1u32;
+        loop {
+            match eat_until(chunk_start, src, src_end, masks, MaskId::Slash) {
+                Err(src_end) => return (src_end, src_end),
+                Ok(ok) => {
+                    (chunk_start, src) = ok;
+                    debug_assert_eq!(src.read(), b'/');
+
+                    if src.sub(1).read() == b'*' && src > start {
+                        depth -= 1;
+                        src = src.add(1);
+                        if depth == 0 {
+                            return (chunk_start, src);
+                        }
+                    } else if src.add(1).read() == b'*' {
+                        depth += 1;
+                        src = src.add(2);
+                    } else {
+                        src = src.add(1);
+                    }
+                }
+            }
+        }
     }
 }
 
