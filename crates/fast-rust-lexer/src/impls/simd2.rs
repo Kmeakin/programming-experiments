@@ -1,4 +1,5 @@
-use std::arch::aarch64::{uint8x16x4_t, uint16x4x2_t, uint16x8x2_t, vld2_u16, vld2q_u16};
+#![allow(clippy::wildcard_imports, clippy::inline_always)]
+
 use std::simd::prelude::*;
 
 use crate::TokenKind;
