@@ -8,7 +8,6 @@ use crate::utils::simdx::*;
 use crate::utils::write_and_advance;
 
 // TODO:
-// * Port double quoted string parser to use bitmasks
 // * Port block comment parser to use bitmasks
 // * Optimize number parsing
 // * Optimize bitmask calculation using lookup tables?
@@ -324,7 +323,8 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 }
                 b'b' => match src.add(1).cast::<[u8; 2]>().read() {
                     [b'r', b'#'] => {
-                        src = eat_hash_string::<VEC_LEN>(src.add(2), src_end);
+                        src = src.add(2);
+                        (chunk_start, src) = eat_hash_string(chunk_start, src, src_end, &mut masks);
                         out = write_token(out, TokenKind::RawByteStr, token_start, src);
                     }
                     [b'r', b'"'] => {
@@ -360,7 +360,8 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 },
                 b'c' => match src.add(1).cast::<[u8; 2]>().read() {
                     [b'r', b'#'] => {
-                        src = eat_hash_string::<VEC_LEN>(src.add(2), src_end);
+                        src = src.add(2);
+                        (chunk_start, src) = eat_hash_string(chunk_start, src, src_end, &mut masks);
                         out = write_token(out, TokenKind::RawCStr, token_start, src);
                     }
                     [b'r', b'"'] => {
@@ -409,7 +410,8 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::RawIdent, token_start, src);
                     }
                     [b'#', ..] => {
-                        src = eat_hash_string::<VEC_LEN>(src.add(1), src_end);
+                        src = src.add(1);
+                        (chunk_start, src) = eat_hash_string(chunk_start, src, src_end, &mut masks);
                         out = write_token(out, TokenKind::RawStr, token_start, src);
                     }
                     _ => {
@@ -545,41 +547,48 @@ fn eat_double_quote_string<const VEC_LEN: usize>(
     }
 }
 
-#[inline]
-fn eat_hash_string<const VEC_LEN: usize>(mut cur: *const u8, src_end: *const u8) -> *const u8 {
+#[inline(always)]
+fn eat_hash_string<const VEC_LEN: usize>(
+    mut chunk_start: *const u8,
+    mut src: *const u8,
+    src_end: *const u8,
+    masks: &mut Masks<VEC_LEN>,
+) -> (*const u8, *const u8) {
     unsafe {
-        debug_assert_eq!(cur.sub(1).read(), b'r');
-        debug_assert_eq!(cur.read(), b'#');
+        debug_assert_eq!(src.sub(1).read(), b'r');
+        debug_assert_eq!(src.read(), b'#');
 
         let mut num_hashes = 0u32;
-        while cur.read() == b'#' {
+        while src.read() == b'#' {
             num_hashes += 1;
-            cur = cur.add(1);
+            src = src.add(1);
         }
 
-        let b'"' = cur.read() else {
-            return cur;
+        let b'"' = src.read() else {
+            return (chunk_start, src);
         };
-        cur = cur.add(1);
+        debug_assert_eq!(src.read(), b'"');
+        src = src.add(1);
 
         loop {
-            let vec = load::<VEC_LEN>(cur);
-            let quote_mask = vec.simd_eq(Simd::splat(b'"'));
-            if let Some(off) = first_set(quote_mask) {
-                cur = cur.add(off).add(1);
-                let mut num_hashes = num_hashes;
-                while cur.read() == b'#' {
-                    cur = cur.add(1);
-                    num_hashes -= 1;
-                    if num_hashes == 0 {
-                        return cur;
+            match eat_until(chunk_start, src, src_end, masks, MaskId::DoubleQuote) {
+                Err(src_end) => {
+                    return (src_end, src_end);
+                }
+                Ok(ok) => {
+                    (chunk_start, src) = ok;
+                    debug_assert_eq!(src.read(), b'"');
+                    src = src.add(1);
+
+                    let mut num_hashes = num_hashes;
+                    while src.read() == b'#' {
+                        src = src.add(1);
+                        num_hashes -= 1;
+                        if num_hashes == 0 {
+                            return (chunk_start, src);
+                        }
                     }
                 }
-                continue;
-            }
-            cur = cur.add(VEC_LEN);
-            if cur >= src_end {
-                return src_end;
             }
         }
     }
