@@ -149,7 +149,7 @@ impl<const VEC_LEN: usize> std::ops::IndexMut<MaskId> for Masks<VEC_LEN> {
     }
 }
 
-unsafe fn skip_while<const VEC_LEN: usize>(
+unsafe fn eat_while<const VEC_LEN: usize>(
     mut chunk_start: *const u8,
     src: *const u8,
     masks: &mut Masks<VEC_LEN>,
@@ -180,7 +180,7 @@ unsafe fn skip_while<const VEC_LEN: usize>(
     }
 }
 
-unsafe fn skip_until<const VEC_LEN: usize>(
+unsafe fn eat_until<const VEC_LEN: usize>(
     mut chunk_start: *const u8,
     mut src: *const u8,
     src_end: *const u8,
@@ -283,7 +283,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
 
                 b'/' => match src.add(1).read() {
                     b'/' => {
-                        match skip_until(chunk_start, src, src_end, &mut masks, MaskId::Newline) {
+                        match eat_until(chunk_start, src, src_end, &mut masks, MaskId::Newline) {
                             Ok(ok) => {
                                 (chunk_start, src) = ok;
                                 out = write_token(out, TokenKind::LineComment, token_start, src);
@@ -325,8 +325,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 b'\'' => {
                     (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 1);
                     if let b'a'..=b'z' | b'A'..=b'Z' | b'_' = src.read() {
-                        (chunk_start, src) =
-                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
+                        (chunk_start, src) = eat_while(chunk_start, src, &mut masks, MaskId::Ident);
                         match src.read() {
                             b'\'' => {
                                 (chunk_start, src) =
@@ -354,7 +353,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                     }
                     [b'r', b'"'] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 3);
-                        match skip_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote)
+                        match eat_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote)
                         {
                             Ok(ok) => (chunk_start, src) = ok,
                             Err(src_end) => {
@@ -379,8 +378,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::Byte, token_start, src);
                     }
                     _ => {
-                        (chunk_start, src) =
-                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
+                        (chunk_start, src) = eat_while(chunk_start, src, &mut masks, MaskId::Ident);
                         out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
@@ -391,7 +389,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                     }
                     [b'r', b'"'] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 3);
-                        match skip_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote)
+                        match eat_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote)
                         {
                             Ok(ok) => (chunk_start, src) = ok,
                             Err(src_end) => {
@@ -410,15 +408,14 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::CStr, token_start, src);
                     }
                     _ => {
-                        (chunk_start, src) =
-                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
+                        (chunk_start, src) = eat_while(chunk_start, src, &mut masks, MaskId::Ident);
                         out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
                 b'r' => match src.add(1).cast::<[u8; 2]>().read() {
                     [b'"', ..] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 2);
-                        match skip_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote)
+                        match eat_until(chunk_start, src, src_end, &mut masks, MaskId::DoubleQuote)
                         {
                             Ok(ok) => (chunk_start, src) = ok,
                             Err(src_end) => {
@@ -432,8 +429,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                     }
                     [b'#', b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
                         (chunk_start, src) = advance(chunk_start, src, src_end, &mut masks, 2);
-                        (chunk_start, src) =
-                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
+                        (chunk_start, src) = eat_while(chunk_start, src, &mut masks, MaskId::Ident);
                         out = write_token(out, TokenKind::RawIdent, token_start, src);
                     }
                     [b'#', ..] => {
@@ -441,25 +437,24 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::RawStr, token_start, src);
                     }
                     _ => {
-                        (chunk_start, src) =
-                            skip_while(chunk_start, src, &mut masks, MaskId::Ident);
+                        (chunk_start, src) = eat_while(chunk_start, src, &mut masks, MaskId::Ident);
                         out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
 
                 b' ' | b'\n' | b'\t' => {
                     (chunk_start, src) =
-                        skip_while(chunk_start, src, &mut masks, MaskId::Whitespace);
+                        eat_while(chunk_start, src, &mut masks, MaskId::Whitespace);
                     out = write_token(out, TokenKind::Whitespace, token_start, src);
                 }
 
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                    (chunk_start, src) = skip_while(chunk_start, src, &mut masks, MaskId::Ident);
+                    (chunk_start, src) = eat_while(chunk_start, src, &mut masks, MaskId::Ident);
                     out = write_token(out, TokenKind::Ident, token_start, src);
                 }
 
                 b'0'..=b'9' => {
-                    (chunk_start, src) = skip_while(chunk_start, src, &mut masks, MaskId::Digits);
+                    (chunk_start, src) = eat_while(chunk_start, src, &mut masks, MaskId::Digits);
                     let mut kind = match src.cast::<[u8; 2]>().read() {
                         [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_'] => {
                             out = write_token(out, TokenKind::Int, token_start, src);
@@ -519,7 +514,7 @@ fn eat_single_quote_string<const VEC_LEN: usize>(
     unsafe {
         debug_assert_eq!(src.sub(1).read(), b'\'');
         loop {
-            match skip_until(chunk_start, src, src_end, masks, MaskId::SingleQuote) {
+            match eat_until(chunk_start, src, src_end, masks, MaskId::SingleQuote) {
                 Err(src_end) => {
                     return (src_end, src_end);
                 }
@@ -554,7 +549,7 @@ fn eat_double_quote_string<const VEC_LEN: usize>(
     unsafe {
         debug_assert_eq!(src.sub(1).read(), b'"');
         loop {
-            match skip_until(chunk_start, src, src_end, masks, MaskId::DoubleQuote) {
+            match eat_until(chunk_start, src, src_end, masks, MaskId::DoubleQuote) {
                 Err(src_end) => {
                     return (src_end, src_end);
                 }
