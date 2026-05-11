@@ -47,7 +47,7 @@ pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> Vec<u8> {
     unsafe {
         let size = src.len() + VEC_LEN * 2;
         let layout = std::alloc::Layout::from_size_align(size, VEC_LEN).unwrap();
-        let ptr = { std::alloc::alloc(layout) };
+        let ptr = std::alloc::alloc(layout);
         assert!(!ptr.is_null());
         let mut vec = Vec::from_raw_parts(ptr, 0, size);
         vec.extend(src.as_bytes());
@@ -58,9 +58,51 @@ pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> Vec<u8> {
     }
 }
 
+fn whitespace_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> Mask<i8, VEC_LEN> {
+    use std::arch::aarch64::*;
+    use std::mem::transmute;
+
+    const LUT: uint8x16_t = unsafe {
+        let mut lut = [0u8; 16];
+        lut[b'\t' as usize] = 0xFF;
+        lut[b'\n' as usize] = 0xFF;
+        lut[b'\r' as usize] = 0xFF;
+        transmute::<[u8; 16], _>(lut)
+    };
+
+    match VEC_LEN {
+        16 => unsafe {
+            let v0: uint8x16_t = vec.resize(0).into();
+            let t0 = vqtbx1q_u8(vceqq_u8(v0, vdupq_n_u8(b' ')), LUT, v0);
+            transmute::<uint8x16_t, Mask<i8, 16>>(t0).resize(false)
+        },
+        32 => unsafe {
+            let uint8x16x2_t(v0, v1) = transmute::<Simd<u8, 32>, uint8x16x2_t>(vec.resize::<32>(0));
+            let t0 = vqtbx1q_u8(vceqq_u8(v0, vdupq_n_u8(b' ')), LUT, v0);
+            let t1 = vqtbx1q_u8(vceqq_u8(v1, vdupq_n_u8(b' ')), LUT, v1);
+            transmute::<uint8x16x2_t, Mask<i8, 32>>(uint8x16x2_t(t0, t1)).resize(false)
+        },
+        64 => unsafe {
+            let uint8x16x4_t(v0, v1, v2, v3) =
+                transmute::<Simd<u8, 64>, uint8x16x4_t>(vec.resize::<64>(0));
+            let t0 = vqtbx1q_u8(vceqq_u8(v0, vdupq_n_u8(b' ')), LUT, v0);
+            let t1 = vqtbx1q_u8(vceqq_u8(v1, vdupq_n_u8(b' ')), LUT, v1);
+            let t2 = vqtbx1q_u8(vceqq_u8(v2, vdupq_n_u8(b' ')), LUT, v2);
+            let t3 = vqtbx1q_u8(vceqq_u8(v3, vdupq_n_u8(b' ')), LUT, v3);
+            transmute::<uint8x16x4_t, Mask<i8, 64>>(uint8x16x4_t(t0, t1, t2, t3)).resize(false)
+        },
+        _ => unreachable!(),
+    }
+}
+
+#[cfg(false)]
 fn whitespace_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
     let mask = eq(vec, b' ') | eq(vec, b'\n') | eq(vec, b'\t');
     BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
+}
+
+fn whitespace_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
+    BitString::new(movemask(whitespace_mask(vec)).reverse_bits())
 }
 
 fn newline_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
@@ -186,6 +228,14 @@ unsafe fn eat_while<const VEC_LEN: usize>(
     id: MaskId,
 ) -> (*const u8, *const u8) {
     unsafe {
+        let chunk_offset = src.offset_from_unsigned(chunk_ptr);
+        if chunk_offset < VEC_LEN {
+            let len = (masks[id] << chunk_offset).leading_ones();
+            if chunk_offset + len < VEC_LEN {
+                return (chunk_ptr, chunk_ptr.add(len + chunk_offset));
+            }
+        }
+
         let mut chunk_ptr = if src.offset_from_unsigned(chunk_ptr) < VEC_LEN {
             chunk_ptr
         } else {
@@ -219,6 +269,14 @@ unsafe fn eat_until<const VEC_LEN: usize>(
     id: MaskId,
 ) -> Result<(*const u8, *const u8), *const u8> {
     unsafe {
+        let chunk_offset = src.offset_from_unsigned(chunk_ptr);
+        if chunk_offset < VEC_LEN {
+            let len = (masks[id] << chunk_offset).leading_zeros();
+            if chunk_offset + len < VEC_LEN {
+                return Ok((chunk_ptr, chunk_ptr.add(len + chunk_offset)));
+            }
+        }
+
         let mut chunk_ptr = if src.offset_from_unsigned(chunk_ptr) < VEC_LEN {
             chunk_ptr
         } else {
