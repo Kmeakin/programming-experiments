@@ -178,6 +178,7 @@ fn align_down<const ALIGN: usize>(ptr: *const u8) -> *const u8 {
     ptr.map_addr(|addr| addr & !(ALIGN - 1))
 }
 
+#[inline(always)]
 unsafe fn eat_while<const VEC_LEN: usize>(
     chunk_ptr: *const u8,
     src: *const u8,
@@ -209,6 +210,7 @@ unsafe fn eat_while<const VEC_LEN: usize>(
     }
 }
 
+#[inline(always)]
 unsafe fn eat_until<const VEC_LEN: usize>(
     chunk_ptr: *const u8,
     src: *const u8,
