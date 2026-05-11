@@ -179,45 +179,56 @@ fn align_down<const ALIGN: usize>(ptr: *const u8) -> *const u8 {
 }
 
 unsafe fn eat_while<const VEC_LEN: usize>(
-    _chunk_ptr: *const u8,
+    chunk_ptr: *const u8,
     src: *const u8,
     masks: &mut Masks<VEC_LEN>,
     id: MaskId,
 ) -> (*const u8, *const u8) {
     unsafe {
-        let mut chunk_ptr = align_down::<VEC_LEN>(src);
+        let mut chunk_ptr = if src.offset_from_unsigned(chunk_ptr) < VEC_LEN {
+            chunk_ptr
+        } else {
+            let chunk_ptr = align_down::<VEC_LEN>(src);
+            *masks = Masks::new(load::<VEC_LEN>(chunk_ptr));
+            chunk_ptr
+        };
         let mut chunk_offset = src.offset_from_unsigned(chunk_ptr);
 
         loop {
             debug_assert!(chunk_ptr.is_aligned_to(VEC_LEN));
 
-            *masks = Masks::new(load::<VEC_LEN>(chunk_ptr));
             let len = (masks[id] << chunk_offset).leading_ones();
             debug_assert!(chunk_offset + len <= VEC_LEN);
             if chunk_offset + len < VEC_LEN {
                 return (chunk_ptr, chunk_ptr.add(len + chunk_offset));
             }
             chunk_ptr = chunk_ptr.add(VEC_LEN);
+            *masks = Masks::new(load::<VEC_LEN>(chunk_ptr));
             chunk_offset = 0;
         }
     }
 }
 
 unsafe fn eat_until<const VEC_LEN: usize>(
-    _chunk_ptr: *const u8,
+    chunk_ptr: *const u8,
     src: *const u8,
     src_end: *const u8,
     masks: &mut Masks<VEC_LEN>,
     id: MaskId,
 ) -> Result<(*const u8, *const u8), *const u8> {
     unsafe {
-        let mut chunk_ptr = align_down::<VEC_LEN>(src);
+        let mut chunk_ptr = if src.offset_from_unsigned(chunk_ptr) < VEC_LEN {
+            chunk_ptr
+        } else {
+            let chunk_ptr = align_down::<VEC_LEN>(src);
+            *masks = Masks::new(load::<VEC_LEN>(chunk_ptr));
+            chunk_ptr
+        };
         let mut chunk_offset = src.offset_from_unsigned(chunk_ptr);
 
         loop {
             debug_assert!(chunk_ptr.is_aligned_to(VEC_LEN));
 
-            *masks = Masks::new(load::<VEC_LEN>(chunk_ptr));
             let len = (masks[id] << chunk_offset).leading_zeros();
             if chunk_offset + len < VEC_LEN {
                 return Ok((chunk_ptr, chunk_ptr.add(len + chunk_offset)));
@@ -228,6 +239,8 @@ unsafe fn eat_until<const VEC_LEN: usize>(
             if chunk_ptr >= src_end {
                 return Err(src_end);
             }
+
+            *masks = Masks::new(load::<VEC_LEN>(chunk_ptr));
         }
     }
 }
