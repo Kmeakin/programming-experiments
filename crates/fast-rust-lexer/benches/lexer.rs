@@ -492,7 +492,7 @@ fn simd2<const VEC_LEN: usize>(c: &mut Criterion) {
     group.bench_function(format!("simd2::lex::<{VEC_LEN}>"), |b| {
         let mut output = vec![0xff; input.len() * 5];
         b.iter(|| {
-            let output = simd::lex::<VEC_LEN>(&input, &mut output);
+            let output = simd2::lex::<VEC_LEN>(&input, &mut output);
             black_box(output);
         });
     });
