@@ -14,9 +14,10 @@ pub fn in_range<const N: usize>(vec: Simd<u8, N>, min: u8, max: u8) -> Mask<i8, 
 /// Usual ptr read requirements.
 pub unsafe fn load<const VEC_LEN: usize>(ptr: *const u8) -> Simd<u8, VEC_LEN> {
     unsafe {
+        debug_assert!(ptr.is_aligned_to(VEC_LEN));
         cfg_select! {
             target_arch = "aarch64" => aarch64::load(ptr),
-            target_arch = "x86_64" => ptr.cast::<Simd<u8, VEC_LEN>>().read_unaligned()
+            target_arch = "x86_64" => ptr.cast::<Simd<u8, VEC_LEN>>().read()
         }
     }
 }

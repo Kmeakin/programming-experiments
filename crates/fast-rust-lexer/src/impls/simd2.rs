@@ -173,79 +173,59 @@ impl<const VEC_LEN: usize> std::ops::IndexMut<MaskId> for Masks<VEC_LEN> {
     }
 }
 
+fn align_down<const ALIGN: usize>(ptr: *const u8) -> *const u8 {
+    const { assert!(ALIGN.is_power_of_two()) }
+    ptr.map_addr(|addr| addr & !(ALIGN - 1))
+}
+
 unsafe fn eat_while<const VEC_LEN: usize>(
-    mut chunk_start: *const u8,
+    _chunk_ptr: *const u8,
     src: *const u8,
     masks: &mut Masks<VEC_LEN>,
     id: MaskId,
 ) -> (*const u8, *const u8) {
     unsafe {
-        let mut chunk_consumed = src.offset_from_unsigned(chunk_start);
-        if chunk_consumed >= VEC_LEN {
-            chunk_consumed = 0;
-            chunk_start = src;
-            let vec = load::<VEC_LEN>(chunk_start);
-            *masks = Masks::new(vec);
-        }
-        let len = (masks[id] << chunk_consumed).leading_ones();
-        let src = src.add(len);
-
-        let mut next_chunk = chunk_start.add(VEC_LEN);
-        if src < next_chunk {
-            return (chunk_start, src);
-        }
+        let mut chunk_ptr = align_down::<VEC_LEN>(src);
+        let mut chunk_offset = src.offset_from_unsigned(chunk_ptr);
 
         loop {
-            chunk_start = next_chunk;
-            let vec = load::<VEC_LEN>(chunk_start);
-            let mask = get_bitstring(vec, id);
-            let len = mask.leading_ones();
-            if len < VEC_LEN {
-                let src = chunk_start.add(len);
-                *masks = Masks::new(vec);
-                return (chunk_start, src);
+            debug_assert!(chunk_ptr.is_aligned_to(VEC_LEN));
+
+            *masks = Masks::new(load::<VEC_LEN>(chunk_ptr));
+            let len = (masks[id] << chunk_offset).leading_ones();
+            debug_assert!(chunk_offset + len <= VEC_LEN);
+            if chunk_offset + len < VEC_LEN {
+                return (chunk_ptr, chunk_ptr.add(len + chunk_offset));
             }
-            next_chunk = chunk_start.add(VEC_LEN);
+            chunk_ptr = chunk_ptr.add(VEC_LEN);
+            chunk_offset = 0;
         }
     }
 }
 
 unsafe fn eat_until<const VEC_LEN: usize>(
-    mut chunk_start: *const u8,
-    mut src: *const u8,
+    _chunk_ptr: *const u8,
+    src: *const u8,
     src_end: *const u8,
     masks: &mut Masks<VEC_LEN>,
     id: MaskId,
 ) -> Result<(*const u8, *const u8), *const u8> {
     unsafe {
-        let mut chunk_consumed = src.offset_from_unsigned(chunk_start);
-        if chunk_consumed >= VEC_LEN {
-            chunk_consumed = 0;
-            chunk_start = src;
-            let vec = load::<VEC_LEN>(chunk_start);
-            *masks = Masks::new(vec);
-        }
-        let len = (masks[id] << chunk_consumed).leading_zeros();
-        src = src.add(len);
-
-        let mut next_chunk = chunk_start.add(VEC_LEN);
-        if src < next_chunk {
-            return Ok((chunk_start, src));
-        }
+        let mut chunk_ptr = align_down::<VEC_LEN>(src);
+        let mut chunk_offset = src.offset_from_unsigned(chunk_ptr);
 
         loop {
-            chunk_start = next_chunk;
-            let vec = load::<VEC_LEN>(chunk_start);
-            let mask = get_bitstring(vec, id);
-            let len = mask.leading_zeros();
-            if len < VEC_LEN {
-                let src = chunk_start.add(len);
-                *masks = Masks::new(vec);
-                return Ok((chunk_start, src));
-            }
+            debug_assert!(chunk_ptr.is_aligned_to(VEC_LEN));
 
-            next_chunk = chunk_start.add(VEC_LEN);
-            if next_chunk >= src_end {
+            *masks = Masks::new(load::<VEC_LEN>(chunk_ptr));
+            let len = (masks[id] << chunk_offset).leading_zeros();
+            if chunk_offset + len < VEC_LEN {
+                return Ok((chunk_ptr, chunk_ptr.add(len + chunk_offset)));
+            }
+            chunk_ptr = chunk_ptr.add(VEC_LEN);
+            chunk_offset = 0;
+
+            if chunk_ptr >= src_end {
                 return Err(src_end);
             }
         }
