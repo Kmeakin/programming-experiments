@@ -28,3 +28,9 @@ pub unsafe fn write_and_advance<T>(out: *mut u8, val: T) -> *mut u8 {
         out.add(size_of::<T>())
     }
 }
+
+#[inline]
+pub fn align_down<const ALIGN: usize>(ptr: *const u8) -> *const u8 {
+    const { assert!(ALIGN.is_power_of_two()) }
+    ptr.map_addr(|addr| addr & !(ALIGN - 1))
+}

@@ -73,9 +73,6 @@ mod aarch64 {
     }
 
     #[inline]
-    fn movemask8(mask: Mask<i8, 8>) -> u8 { mask.to_bitmask() as u8 }
-
-    #[inline]
     pub fn movemask_interleaved16(mask: Mask<i8, 16>) -> u16 {
         unsafe {
             let uint16x4x2_t(v0, v1) = transmute::<Mask<i8, 16>, uint16x4x2_t>(mask);
@@ -122,19 +119,10 @@ mod aarch64 {
     #[inline]
     pub fn movemask<const N: usize>(mask: Mask<i8, N>) -> u64 {
         match N {
-            8 => u64::from(movemask8(mask.resize::<8>(false))),
             16 => u64::from(movemask_interleaved16(mask.resize::<16>(false))),
             32 => u64::from(movemask_interleaved32(mask.resize::<32>(false))),
             64 => movemask_interleaved64(mask.resize::<64>(false)),
             _ => panic!("Unsupported vector length"),
-        }
-    }
-
-    #[test]
-    fn check_movemask8() {
-        for i in 0..8 {
-            let mask: Mask<i8, 8> = Mask::from_bitmask(1 << i);
-            assert_eq!(movemask(mask), mask.to_bitmask());
         }
     }
 

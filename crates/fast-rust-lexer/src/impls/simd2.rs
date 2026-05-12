@@ -174,6 +174,7 @@ impl<const VEC_LEN: usize> Masks<VEC_LEN> {
     }
 }
 
+#[allow(dead_code)]
 fn get_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, id: MaskId) -> BitString<VEC_LEN> {
     match id {
         MaskId::Whitespace => whitespace_bitstring(vec),

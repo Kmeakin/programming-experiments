@@ -7,7 +7,8 @@
     rust_preserve_none_cc,
     simd_ffi,
     slice_from_ptr_range,
-    pointer_is_aligned_to
+    pointer_is_aligned_to,
+    likely_unlikely
 )]
 #![allow(unused_features, incomplete_features, internal_features)]
 

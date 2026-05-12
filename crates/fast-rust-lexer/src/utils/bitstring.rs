@@ -37,3 +37,13 @@ impl<const BITS: usize> ops::Shl<usize> for BitString<BITS> {
 impl<const BITS: usize> ops::ShlAssign<usize> for BitString<BITS> {
     fn shl_assign(&mut self, amount: usize) { *self = *self << amount; }
 }
+
+impl<const BITS: usize> ops::BitOr for BitString<BITS> {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self {
+            bits: self.bits | rhs.bits,
+        }
+    }
+}

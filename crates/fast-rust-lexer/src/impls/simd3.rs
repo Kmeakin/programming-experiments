@@ -1,5 +1,9 @@
+use std::simd::prelude::*;
+
 use crate::TokenKind;
-use crate::utils::write_and_advance;
+use crate::utils::bitstring::BitString;
+use crate::utils::simdx::*;
+use crate::utils::{align_down, write_and_advance};
 
 pub const EOF_BYTE: u8 = 0xFF;
 
@@ -58,6 +62,11 @@ const fn is_punct(b: u8) -> bool {
     }
 }
 
+fn newline_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
+    let mask = eq(vec, b'\n');
+    BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
+}
+
 fn lex_loop<const VEC_LEN: usize>(
     mut src: *const u8,
     src_end: *const u8,
@@ -77,7 +86,7 @@ fn lex_loop<const VEC_LEN: usize>(
                 b' ' | b'\n' | b'\t' => (src, out) = lex_whitespace(src, out),
 
                 b'/' => match src.add(1).read() {
-                    b'/' => (src, out) = lex_line_comment(src, out),
+                    b'/' => (src, out) = lex_line_comment::<VEC_LEN>(src, src_end, out),
                     b'*' => (src, out) = lex_block_comment(src, out),
                     _ => {
                         src = src.add(1);
@@ -159,14 +168,37 @@ unsafe fn lex_whitespace(mut src: *const u8, mut out: *mut u8) -> (*const u8, *m
     }
 }
 
-unsafe fn lex_line_comment(mut src: *const u8, mut out: *mut u8) -> (*const u8, *mut u8) {
+unsafe fn lex_line_comment<const VEC_LEN: usize>(
+    mut src: *const u8,
+    src_end: *const u8,
+    mut out: *mut u8,
+) -> (*const u8, *mut u8) {
     unsafe {
         let token_start = src;
-        while src.read() != b'\n' && src.read() != EOF_BYTE {
-            src = src.add(1);
+
+        let mut chunk_ptr = align_down::<VEC_LEN>(src);
+        let mut chunk_offset = src.offset_from_unsigned(chunk_ptr);
+        let mut vec = load::<VEC_LEN>(chunk_ptr);
+        let mut newlines = newline_bitstring(vec);
+
+        loop {
+            let len = (newlines << chunk_offset).leading_zeros();
+            if len + chunk_offset < VEC_LEN {
+                src = chunk_ptr.add(len + chunk_offset);
+                out = write_token(out, TokenKind::LineComment, token_start, src);
+                return (src, out);
+            }
+
+            chunk_offset = 0;
+            chunk_ptr = chunk_ptr.add(VEC_LEN);
+            if chunk_ptr >= src_end {
+                src = src_end;
+                out = write_token(out, TokenKind::LineComment, token_start, src);
+                return (src, out);
+            }
+            vec = load::<VEC_LEN>(chunk_ptr);
+            newlines = newline_bitstring(vec);
         }
-        out = write_token(out, TokenKind::LineComment, token_start, src);
-        (src, out)
     }
 }
 

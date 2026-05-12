@@ -530,13 +530,14 @@ fn main() {
     raw_ptr::<16>(&mut criterion);
     raw_ptr::<32>(&mut criterion);
     raw_ptr::<64>(&mut criterion);
-    multi_pass(&mut criterion);
 
-    simd(&mut criterion);
+    // multi_pass(&mut criterion);
 
-    simd2::<16>(&mut criterion);
-    simd2::<32>(&mut criterion);
-    simd2::<64>(&mut criterion);
+    // simd(&mut criterion);
+
+    // simd2::<16>(&mut criterion);
+    // simd2::<32>(&mut criterion);
+    // simd2::<64>(&mut criterion);
 
     simd3::<16>(&mut criterion);
     simd3::<32>(&mut criterion);
