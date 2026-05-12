@@ -535,9 +535,9 @@ fn main() {
 
     // simd(&mut criterion);
 
-    // simd2::<16>(&mut criterion);
-    // simd2::<32>(&mut criterion);
-    // simd2::<64>(&mut criterion);
+    simd2::<16>(&mut criterion);
+    simd2::<32>(&mut criterion);
+    simd2::<64>(&mut criterion);
 
     simd3::<16>(&mut criterion);
     simd3::<32>(&mut criterion);

@@ -1,3 +1,5 @@
+#![allow(clippy::wildcard_imports)]
+
 use std::simd::prelude::*;
 
 use crate::TokenKind;
@@ -18,13 +20,31 @@ pub fn lex<'out, const VEC_LEN: usize>(input: &[u8], out: &'out mut [u8]) -> &'o
         debug_assert!(out.len() >= input.len() * 5); // Each token is at most 5 bytes (kind + len)
         let out_start = out.as_mut_ptr();
         let src_end = input.as_ptr_range().end.sub(VEC_LEN * 2);
-        let out_end = lex_loop::<VEC_LEN>(input.as_ptr(), src_end, out_start);
+
+        let state = {
+            let src = input.as_ptr();
+            let out = out.as_mut_ptr();
+
+            let vec = load::<VEC_LEN>(src);
+            let chunk = Chunk {
+                newlines: newline_bitstring(vec),
+            };
+            State {
+                src,
+                src_end,
+                chunk_ptr: src,
+                out,
+                chunk,
+            }
+        };
+        let out_end = lex_loop(state);
         let out_len = out_end.offset_from_unsigned(out_start);
         &mut out[..out_len]
     }
 }
 
 #[must_use]
+#[track_caller]
 unsafe fn write_token(out: *mut u8, kind: TokenKind, start: *const u8, end: *const u8) -> *mut u8 {
     unsafe {
         let len = end.offset_from_unsigned(start) as u32;
@@ -67,252 +87,271 @@ fn newline_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<
     BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
 }
 
-fn lex_loop<const VEC_LEN: usize>(
-    mut src: *const u8,
-    src_end: *const u8,
-    mut out: *mut u8,
-) -> *mut u8 {
+struct Chunk<const VEC_LEN: usize> {
+    newlines: BitString<VEC_LEN>,
+}
+
+struct State<const VEC_LEN: usize> {
+    src:       *const u8,
+    src_end:   *const u8,
+    chunk_ptr: *const u8,
+    out:       *mut u8,
+    chunk:     Chunk<VEC_LEN>,
+}
+
+impl<const VEC_LEN: usize> State<VEC_LEN> {
+    #[track_caller]
+    unsafe fn write_token(&mut self, kind: TokenKind, start: *const u8) {
+        unsafe { self.out = write_token(self.out, kind, start, self.src) }
+    }
+
+    unsafe fn read(&self) -> u8 {
+        unsafe {
+            debug_assert!(self.src <= self.src_end);
+            self.src.read()
+        }
+    }
+
+    unsafe fn read_n<const N: usize>(&self) -> [u8; N] {
+        unsafe {
+            debug_assert!(self.src <= self.src_end);
+            self.src.cast::<[u8; N]>().read()
+        }
+    }
+}
+
+fn lex_loop<const VEC_LEN: usize>(mut state: State<VEC_LEN>) -> *mut u8 {
     unsafe {
         loop {
-            let token_start = src;
-            let byte = src.read();
-            debug_assert!(src <= src_end.add(VEC_LEN));
+            debug_assert!(state.src <= state.src_end.add(VEC_LEN));
+            let byte = state.read();
 
             match byte {
                 | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+' | b'-'
                 | b'*' | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@' | b'.'
-                | b'!' | b'>' | b'<' | b'^' => (src, out) = lex_punct(src, out, byte),
+                | b'!' | b'>' | b'<' | b'^' => state = lex_punct(state, byte),
 
-                b' ' | b'\n' | b'\t' => (src, out) = lex_whitespace(src, out),
+                b' ' | b'\n' | b'\t' => state = lex_whitespace(state),
 
-                b'/' => match src.add(1).read() {
-                    b'/' => (src, out) = lex_line_comment::<VEC_LEN>(src, src_end, out),
-                    b'*' => (src, out) = lex_block_comment(src, out),
+                b'/' => match state.src.add(1).read() {
+                    b'/' => state = lex_line_comment(state),
+                    b'*' => state = lex_block_comment(state),
                     _ => {
-                        src = src.add(1);
-                        out = write_punct(out, byte);
+                        state.src = state.src.add(1);
+                        state.out = write_punct(state.out, byte);
                     }
                 },
 
-                b'\'' => (src, out) = lex_lifetime_or_char(src, out),
-                b'"' => (src, out) = lex_string(src, src, out, TokenKind::Str),
+                b'\'' => state = lex_lifetime_or_char(state),
+                b'"' => state = lex_string(state, TokenKind::Str, 0),
 
-                b'b' | b'c' | b'r' => match src.cast::<[u8; 3]>().read() {
-                    [b'b', b'\'', _] => (src, out) = lex_b_char(src, out),
-                    [b'b', b'r', b'"'] => {
-                        (src, out) = lex_raw_string(src, src.add(2), out, TokenKind::RawByteStr);
-                    }
-                    [b'b', b'r', b'#'] => {
-                        (src, out) = lex_hash_string(src, src.add(2), out, TokenKind::RawByteStr);
-                    }
-                    [b'b', b'"', _] => {
-                        (src, out) = lex_string(src, src.add(1), out, TokenKind::ByteStr);
-                    }
+                b'b' | b'c' | b'r' => match &state.read_n::<3>() {
+                    [b'b', b'\'', _] => state = lex_b_char(state),
 
-                    [b'c', b'r', b'"'] => {
-                        (src, out) = lex_raw_string(src, src.add(2), out, TokenKind::RawCStr);
-                    }
+                    b"br\"" => state = lex_raw_string(state, TokenKind::RawByteStr, 2),
+                    b"cr\"" => state = lex_raw_string(state, TokenKind::RawCStr, 2),
+                    [b'r', b'"', _] => state = lex_raw_string(state, TokenKind::RawStr, 1),
 
-                    [b'c', b'r', b'#'] => {
-                        (src, out) = lex_hash_string(src, src.add(2), out, TokenKind::RawCStr);
-                    }
-                    [b'c', b'"', _] => {
-                        (src, out) = lex_string(src, src.add(1), out, TokenKind::CStr);
-                    }
+                    b"br#" => state = lex_hash_string(state, TokenKind::RawByteStr, 2),
+                    b"cr#" => state = lex_hash_string(state, TokenKind::RawCStr, 2),
+                    b"r##" | b"r#\"" => state = lex_hash_string(state, TokenKind::RawStr, 1),
 
-                    [b'r', b'"', _] => {
-                        (src, out) = lex_raw_string(src, src.add(1), out, TokenKind::RawStr);
-                    }
-                    [b'r', b'#', b'#' | b'"'] => {
-                        (src, out) = lex_hash_string(src, src.add(1), out, TokenKind::RawStr);
-                    }
-                    [b'r', b'#', _] => (src, out) = lex_raw_ident(src, out),
-                    _ => (src, out) = lex_ident(src, out),
+                    [b'b', b'"', _] => state = lex_string(state, TokenKind::ByteStr, 1),
+                    [b'c', b'"', _] => state = lex_string(state, TokenKind::CStr, 1),
+
+                    [b'r', b'#', _] => state = lex_raw_ident(state),
+                    _ => state = lex_ident(state),
                 },
 
-                b'_' | b'a'..=b'z' | b'A'..=b'Z' => (src, out) = lex_ident(src, out),
-                b'0'..=b'9' => (src, out) = lex_int_or_float(src, out),
+                b'_' | b'a'..=b'z' | b'A'..=b'Z' => state = lex_ident(state),
+                b'0'..=b'9' => state = lex_int_or_float(state),
 
-                EOF_BYTE => return out,
+                EOF_BYTE => return state.out,
                 _ => {
-                    src = src.add(1);
-                    out = write_token(out, TokenKind::Unknown, token_start, src);
+                    let token_start = state.src;
+                    state.src = state.src.add(1);
+                    state.write_token(TokenKind::Unknown, token_start);
                 }
             }
         }
     }
 }
 
-unsafe fn lex_punct(mut src: *const u8, mut out: *mut u8, mut byte: u8) -> (*const u8, *mut u8) {
+unsafe fn lex_punct<const VEC_LEN: usize>(
+    mut state: State<VEC_LEN>,
+    mut byte: u8,
+) -> State<VEC_LEN> {
     unsafe {
         loop {
-            out = write_punct(out, byte);
-            src = src.add(1);
-            byte = src.read();
+            state.out = write_punct(state.out, byte);
+            state.src = state.src.add(1);
+            byte = state.read();
             if !is_punct(byte) {
                 break;
             }
         }
-        (src, out)
+        state
     }
 }
 
-unsafe fn lex_whitespace(mut src: *const u8, mut out: *mut u8) -> (*const u8, *mut u8) {
+unsafe fn lex_whitespace<const VEC_LEN: usize>(mut state: State<VEC_LEN>) -> State<VEC_LEN> {
     unsafe {
-        let token_start = src;
-        while let b' ' | b'\n' | b'\t' = src.read() {
-            src = src.add(1);
+        let token_start = state.src;
+        while let b' ' | b'\n' | b'\t' = state.read() {
+            state.src = state.src.add(1);
         }
-        out = write_token(out, TokenKind::Whitespace, token_start, src);
-        (src, out)
+        state.write_token(TokenKind::Whitespace, token_start);
+        state
     }
 }
 
-unsafe fn lex_line_comment<const VEC_LEN: usize>(
-    mut src: *const u8,
-    src_end: *const u8,
-    mut out: *mut u8,
-) -> (*const u8, *mut u8) {
+unsafe fn lex_line_comment<const VEC_LEN: usize>(mut state: State<VEC_LEN>) -> State<VEC_LEN> {
     unsafe {
-        let token_start = src;
+        let token_start = state.src;
 
-        let mut chunk_ptr = align_down::<VEC_LEN>(src);
-        let mut chunk_offset = src.offset_from_unsigned(chunk_ptr);
-        let mut vec = load::<VEC_LEN>(chunk_ptr);
-        let mut newlines = newline_bitstring(vec);
+        let mut chunk_offset = state.src.offset_from_unsigned(state.chunk_ptr);
+        if chunk_offset >= VEC_LEN {
+            state.chunk_ptr = align_down::<VEC_LEN>(state.src);
+            chunk_offset = state.src.offset_from_unsigned(state.chunk_ptr);
+
+            let vec = load::<VEC_LEN>(state.chunk_ptr);
+            state.chunk.newlines = newline_bitstring(vec);
+        }
 
         loop {
-            let len = (newlines << chunk_offset).leading_zeros();
+            let len = (state.chunk.newlines << chunk_offset).leading_zeros();
             if len + chunk_offset < VEC_LEN {
-                src = chunk_ptr.add(len + chunk_offset);
-                out = write_token(out, TokenKind::LineComment, token_start, src);
-                return (src, out);
+                state.src = state.chunk_ptr.add(len + chunk_offset);
+                state.write_token(TokenKind::LineComment, token_start);
+                return state;
             }
 
-            chunk_offset = 0;
-            chunk_ptr = chunk_ptr.add(VEC_LEN);
-            if chunk_ptr >= src_end {
-                src = src_end;
-                out = write_token(out, TokenKind::LineComment, token_start, src);
-                return (src, out);
+            state.chunk_ptr = state.chunk_ptr.add(VEC_LEN);
+            if state.chunk_ptr >= state.src_end {
+                state.src = state.src_end;
+                state.write_token(TokenKind::LineComment, token_start);
+                return state;
             }
-            vec = load::<VEC_LEN>(chunk_ptr);
-            newlines = newline_bitstring(vec);
+
+            state.chunk.newlines = newline_bitstring(load(state.chunk_ptr));
+            chunk_offset = 0;
         }
     }
 }
 
-unsafe fn lex_block_comment(mut src: *const u8, mut out: *mut u8) -> (*const u8, *mut u8) {
+unsafe fn lex_block_comment<const VEC_LEN: usize>(mut state: State<VEC_LEN>) -> State<VEC_LEN> {
     unsafe {
-        let token_start = src;
+        let token_start = state.src;
         let mut depth = 0u32;
 
         loop {
-            match &src.cast::<[u8; 2]>().read() {
+            match &state.read_n::<2>() {
                 b"/*" => {
-                    src = src.add(2);
+                    state.src = state.src.add(2);
                     depth += 1;
                 }
                 b"*/" => {
-                    src = src.add(2);
+                    state.src = state.src.add(2);
                     depth -= 1;
                     if depth == 0 {
                         break;
                     }
                 }
                 [EOF_BYTE, _] => break,
-                _ => src = src.add(1),
+                _ => state.src = state.src.add(1),
             }
         }
 
-        out = write_token(out, TokenKind::BlockComment, token_start, src);
-        (src, out)
+        state.out = write_token(state.out, TokenKind::BlockComment, token_start, state.src);
+        state
     }
 }
 
-unsafe fn lex_raw_ident(mut src: *const u8, mut out: *mut u8) -> (*const u8, *mut u8) {
+unsafe fn lex_raw_ident<const VEC_LEN: usize>(mut state: State<VEC_LEN>) -> State<VEC_LEN> {
     unsafe {
-        let token_start = src;
-        debug_assert_eq!(src.cast::<[u8; 2]>().read(), *b"r#");
-        src = src.add(2);
+        let token_start = state.src;
+        debug_assert_eq!(state.read_n::<2>(), *b"r#");
+        state.src = state.src.add(2);
 
-        while let b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' = src.read() {
-            src = src.add(1);
+        while let b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' = state.read() {
+            state.src = state.src.add(1);
         }
-        out = write_token(out, TokenKind::RawIdent, token_start, src);
-        (src, out)
+        state.write_token(TokenKind::RawIdent, token_start);
+        state
     }
 }
 
-unsafe fn lex_ident(mut src: *const u8, mut out: *mut u8) -> (*const u8, *mut u8) {
+unsafe fn lex_ident<const VEC_LEN: usize>(mut state: State<VEC_LEN>) -> State<VEC_LEN> {
     unsafe {
-        let token_start = src;
-        while let b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' = src.read() {
-            src = src.add(1);
+        let token_start = state.src;
+        while let b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' = state.read() {
+            state.src = state.src.add(1);
         }
-        out = write_token(out, TokenKind::Ident, token_start, src);
-        (src, out)
+        state.write_token(TokenKind::Ident, token_start);
+        state
     }
 }
 
-unsafe fn lex_int_or_float(mut src: *const u8, mut out: *mut u8) -> (*const u8, *mut u8) {
+unsafe fn lex_int_or_float<const VEC_LEN: usize>(mut state: State<VEC_LEN>) -> State<VEC_LEN> {
     unsafe {
-        let token_start = src;
-        while let b'_' | b'0'..=b'9' = src.read() {
-            src = src.add(1);
+        let token_start = state.src;
+        while let b'_' | b'0'..=b'9' = state.read() {
+            state.src = state.src.add(1);
         }
-        let mut kind = match src.cast::<[u8; 2]>().read() {
+        let mut kind = match state.read_n::<2>() {
             [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_'] => {
-                out = write_token(out, TokenKind::Int, token_start, src);
-                return (src, out);
+                state.write_token(TokenKind::Int, token_start);
+                return state;
             }
             [b'.', _] => {
-                src = src.add(1);
-                while let b'_' | b'0'..=b'9' = src.read() {
-                    src = src.add(1);
+                state.src = state.src.add(1);
+                while let b'_' | b'0'..=b'9' = state.read() {
+                    state.src = state.src.add(1);
                 }
                 TokenKind::Float
             }
             _ => TokenKind::Int,
         };
-        if let b'e' | b'E' = src.read() {
+        if let b'e' | b'E' = state.read() {
             kind = TokenKind::Float;
-            src = src.add(1);
-            src = src.add(usize::from(matches!(src.read(), b'+' | b'-')));
+            state.src = state.src.add(1);
+            state.src = state
+                .src
+                .add(usize::from(matches!(state.read(), b'+' | b'-')));
         }
-        while let b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' = src.read() {
-            src = src.add(1);
+        while let b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' = state.read() {
+            state.src = state.src.add(1);
         }
-        out = write_token(out, kind, token_start, src);
-        (src, out)
+        state.write_token(kind, token_start);
+        state
     }
 }
 
-unsafe fn lex_lifetime_or_char(mut src: *const u8, mut out: *mut u8) -> (*const u8, *mut u8) {
+unsafe fn lex_lifetime_or_char<const VEC_LEN: usize>(mut state: State<VEC_LEN>) -> State<VEC_LEN> {
     unsafe {
-        let token_start = src;
-        debug_assert_eq!(src.read(), b'\'');
-        src = src.add(1);
+        let token_start = state.src;
+        debug_assert_eq!(state.read(), b'\'');
+        state.src = state.src.add(1);
 
-        if let b'_' | b'a'..=b'z' | b'A'..=b'Z' = src.read() {
-            while let b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' = src.read() {
-                src = src.add(1);
+        if let b'_' | b'a'..=b'z' | b'A'..=b'Z' = state.read() {
+            while let b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' = state.read() {
+                state.src = state.src.add(1);
             }
-            if src.read() == b'\'' {
-                src = src.add(1);
-                out = write_token(out, TokenKind::Char, token_start, src);
-                return (src, out);
+            if state.read() == b'\'' {
+                state.src = state.src.add(1);
+                state.write_token(TokenKind::Char, token_start);
+                return state;
             }
-            out = write_token(out, TokenKind::Lifetime, token_start, src);
-            return (src, out);
+            state.write_token(TokenKind::Lifetime, token_start);
+            return state;
         }
 
         loop {
-            match src.read() {
+            match state.read() {
                 EOF_BYTE => break,
                 b'\'' => {
-                    let mut src_back = src.sub(1);
-                    src = src.add(1);
+                    let mut src_back = state.src.sub(1);
+                    state.src = state.src.add(1);
                     let mut num_backslashes = 0;
                     while src_back.read() == b'\\' {
                         num_backslashes += 1;
@@ -322,27 +361,27 @@ unsafe fn lex_lifetime_or_char(mut src: *const u8, mut out: *mut u8) -> (*const 
                         break;
                     }
                 }
-                _ => src = src.add(1),
+                _ => state.src = state.src.add(1),
             }
         }
 
-        out = write_token(out, TokenKind::Char, token_start, src);
-        (src, out)
+        state.out = write_token(state.out, TokenKind::Char, token_start, state.src);
+        state
     }
 }
 
-unsafe fn lex_b_char(mut src: *const u8, mut out: *mut u8) -> (*const u8, *mut u8) {
+unsafe fn lex_b_char<const VEC_LEN: usize>(mut state: State<VEC_LEN>) -> State<VEC_LEN> {
     unsafe {
-        let token_start = src;
-        debug_assert_eq!(src.cast::<[u8; 2]>().read(), *b"b'");
-        src = src.add(2);
+        let token_start = state.src;
+        debug_assert_eq!(state.read_n::<2>(), *b"b'");
+        state.src = state.src.add(2);
 
         loop {
-            match src.read() {
+            match state.read() {
                 EOF_BYTE => break,
                 b'\'' => {
-                    let mut src_back = src.sub(1);
-                    src = src.add(1);
+                    let mut src_back = state.src.sub(1);
+                    state.src = state.src.add(1);
                     let mut num_backslashes = 0;
                     while src_back.read() == b'\\' {
                         num_backslashes += 1;
@@ -352,31 +391,33 @@ unsafe fn lex_b_char(mut src: *const u8, mut out: *mut u8) -> (*const u8, *mut u
                         break;
                     }
                 }
-                _ => src = src.add(1),
+                _ => state.src = state.src.add(1),
             }
         }
 
-        out = write_token(out, TokenKind::Byte, token_start, src);
-        (src, out)
+        state.write_token(TokenKind::Byte, token_start);
+        state
     }
 }
 
-unsafe fn lex_string(
-    token_start: *const u8,
-    mut src: *const u8,
-    mut out: *mut u8,
+unsafe fn lex_string<const VEC_LEN: usize>(
+    mut state: State<VEC_LEN>,
     kind: TokenKind,
-) -> (*const u8, *mut u8) {
+    prefix_len: usize,
+) -> State<VEC_LEN> {
     unsafe {
-        debug_assert_eq!(src.read(), b'"');
-        src = src.add(1);
+        let token_start = state.src;
+        state.src = state.src.add(prefix_len);
+
+        debug_assert_eq!(state.read(), b'"');
+        state.src = state.src.add(1);
 
         loop {
-            match src.read() {
+            match state.read() {
                 EOF_BYTE => break,
                 b'"' => {
-                    let mut src_back = src.sub(1);
-                    src = src.add(1);
+                    let mut src_back = state.src.sub(1);
+                    state.src = state.src.add(1);
                     let mut num_backslashes = 0;
                     while src_back.read() == b'\\' {
                         num_backslashes += 1;
@@ -386,82 +427,85 @@ unsafe fn lex_string(
                         break;
                     }
                 }
-                _ => src = src.add(1),
+                _ => state.src = state.src.add(1),
             }
         }
 
-        out = write_token(out, kind, token_start, src);
-        (src, out)
+        state.write_token(kind, token_start);
+        state
     }
 }
 
-unsafe fn lex_hash_string(
-    token_start: *const u8,
-    mut src: *const u8,
-    mut out: *mut u8,
+unsafe fn lex_hash_string<const VEC_LEN: usize>(
+    mut state: State<VEC_LEN>,
     kind: TokenKind,
-) -> (*const u8, *mut u8) {
+    prefix_len: usize,
+) -> State<VEC_LEN> {
     unsafe {
-        debug_assert_eq!(src.read(), b'#');
+        let token_start = state.src;
+        state.src = state.src.add(prefix_len);
+        debug_assert_eq!(state.read(), b'#');
 
         let mut opening_hashes = 0u32;
-        while src.read() == b'#' {
+        while state.read() == b'#' {
             opening_hashes += 1;
-            src = src.add(1);
+            state.src = state.src.add(1);
         }
 
-        let b'"' = src.read() else {
-            out = write_token(out, kind, token_start, src);
-            return (src, out);
+        let b'"' = state.read() else {
+            state.write_token(kind, token_start);
+            return state;
         };
-        src = src.add(1);
+        state.src = state.src.add(1);
 
         'outer: loop {
-            match src.read() {
+            match state.read() {
                 EOF_BYTE => break,
                 b'"' => {
-                    src = src.add(1);
+                    state.src = state.src.add(1);
                     let mut closing_hashes = 0u32;
-                    while src.read() == b'#' {
+                    while state.read() == b'#' {
                         closing_hashes += 1;
-                        src = src.add(1);
+                        state.src = state.src.add(1);
                         if closing_hashes == opening_hashes {
                             break 'outer;
                         }
                     }
                 }
-                _ => src = src.add(1),
+                _ => state.src = state.src.add(1),
             }
         }
 
-        out = write_token(out, kind, token_start, src);
-        (src, out)
+        state.write_token(kind, token_start);
+        state
     }
 }
 
-unsafe fn lex_raw_string(
-    token_start: *const u8,
-    mut src: *const u8,
-    mut out: *mut u8,
+unsafe fn lex_raw_string<const VEC_LEN: usize>(
+    mut state: State<VEC_LEN>,
     kind: TokenKind,
-) -> (*const u8, *mut u8) {
+    prefix_len: usize,
+) -> State<VEC_LEN> {
     unsafe {
-        debug_assert_eq!(src.read(), b'"');
-        src = src.add(1);
+        let token_start = state.src;
+        state.src = state.src.add(prefix_len);
+
+        debug_assert_eq!(state.read(), b'"');
+        state.src = state.src.add(1);
 
         loop {
-            match src.read() {
+            match state.read() {
                 EOF_BYTE => break,
                 b'"' => {
-                    src = src.add(1);
+                    state.src = state.src.add(1);
                     break;
                 }
-                _ => src = src.add(1),
+                _ => state.src = state.src.add(1),
             }
         }
 
-        out = write_token(out, kind, token_start, src);
-        (src, out)
+        state.write_token(kind, token_start);
+        state
     }
 }
 
