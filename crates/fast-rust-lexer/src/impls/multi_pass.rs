@@ -1,434 +1,139 @@
-#![allow(warnings)]
+#![allow(clippy::wildcard_imports)]
 
-use std::hint::select_unpredictable as select;
-use std::ops::Shl;
-use std::ptr;
+use std::ops::BitOr;
 use std::simd::prelude::*;
 
-use crate::utils::bitstring::BitString;
-use crate::utils::simdx::movemask;
+use crate::utils::simdx::*;
 
 pub const EOF_BYTE: u8 = 0xFF;
+const NUM_VECS: usize = 5;
 
-const LINE_COMMENT: u8 = 0xFE;
-const BLOCK_COMMENT: u8 = 0xFD;
-const STRING: u8 = 0xFC;
-const CHAR: u8 = 0xFB;
-
-fn eq<const N: usize>(chunk: Simd<u8, N>, byte: u8) -> Mask<i8, N> {
-    chunk.simd_eq(Simd::splat(byte))
-}
-
-#[inline]
-fn write_and_advance<T>(out: *mut u8, val: T) -> *mut u8 {
+pub fn prepare_input<W: Word, const VEC_LEN: usize>(src: &str) -> (Vec<u8>, [Vec<W>; NUM_VECS]) {
     unsafe {
-        out.cast::<T>().write_unaligned(val);
-        out.add(std::mem::size_of::<T>())
+        let size = src.len() + VEC_LEN * 2;
+        let layout = std::alloc::Layout::from_size_align(size, VEC_LEN).unwrap();
+        let ptr = std::alloc::alloc(layout);
+        assert!(!ptr.is_null());
+        let mut input_vec = Vec::from_raw_parts(ptr, 0, size);
+        input_vec.extend(src.as_bytes());
+        input_vec.extend([EOF_BYTE; VEC_LEN]);
+        input_vec.extend([EOF_BYTE; VEC_LEN]);
+        assert!(input_vec.as_ptr().is_aligned_to(VEC_LEN));
+
+        let num_words = input_vec.len().div_ceil(VEC_LEN);
+        let out_vecs = [
+            vec![W::ZERO; num_words],
+            vec![W::ZERO; num_words],
+            vec![W::ZERO; num_words],
+            vec![W::ZERO; num_words],
+            vec![W::ZERO; num_words],
+        ];
+        (input_vec, out_vecs)
     }
 }
 
-pub unsafe fn line_comment_starts<const VEC_LEN: usize>(
-    input: &[u8],
-    mut out: *mut u32,
-) -> *mut u32 {
-    debug_assert!(input.ends_with([[EOF_BYTE; VEC_LEN]; 2].as_flattened()));
-    let std::ops::Range {
-        start: src_start,
-        end,
-    } = input.as_ptr_range();
+pub trait Word: Copy {
+    const ZERO: Self;
 
-    unsafe {
-        let src_end = end.sub(VEC_LEN * 2);
-        let mut cursor = src_start;
+    type Vec: Copy;
+    type Mask: Copy + BitOr<Output = Self::Mask>;
 
-        loop {
-            let chunk = cursor.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
-            let comment_start = eq(chunk, b'/');
-            let mut bitstring = movemask(comment_start);
-
-            if bitstring != 0 {
-                bitstring = bitstring.reverse_bits();
-                bitstring &= bitstring << 1;
-                let mut cursor = cursor;
-                while bitstring != 0 {
-                    let pos = bitstring.leading_zeros();
-                    bitstring <<= pos;
-                    bitstring <<= 2;
-                    let comment_start = cursor.add(pos as usize);
-                    debug_assert_eq!(comment_start.add(0).read(), b'/');
-                    debug_assert_eq!(comment_start.add(1).read(), b'/');
-                    cursor = comment_start.add(2);
-                    let comment_offset = comment_start.offset_from_unsigned(src_start) as u32;
-                    out.write(comment_offset);
-                    out = out.add(1);
-                }
-            }
-            cursor = cursor.add(VEC_LEN);
-            if cursor >= src_end {
-                break;
-            }
-        }
-        out
-    }
+    /// # Safety
+    /// Usual pointer validity rules.
+    unsafe fn load(ptr: *const u8) -> Self::Vec;
+    fn eq(vec: Self::Vec, byte: u8) -> Self::Mask;
+    fn in_range(vec: Self::Vec, start: u8, end: u8) -> Self::Mask;
+    fn movemask(mask: Self::Mask) -> Self;
 }
 
-struct NewlineMask {
-    bits: u64,
+impl Word for u16 {
+    const ZERO: Self = 0;
+
+    type Vec = Simd<u8, 16>;
+    type Mask = Mask<i8, 16>;
+
+    unsafe fn load(ptr: *const u8) -> Self::Vec { unsafe { load::<16>(ptr) } }
+    fn eq(vec: Self::Vec, byte: u8) -> Self::Mask { vec.simd_eq(Simd::splat(byte)) }
+    fn in_range(vec: Self::Vec, start: u8, end: u8) -> Self::Mask {
+        Simd::splat(start).simd_le(vec) & vec.simd_le(Simd::splat(end))
+    }
+    fn movemask(mask: Self::Mask) -> Self { movemask(mask) as Self }
 }
 
-impl NewlineMask {
-    fn from_ptr<const VEC_LEN: usize>(ptr: *const u8) -> Self {
-        let vec = unsafe { ptr.cast::<Simd<u8, VEC_LEN>>().read_unaligned() };
-        Self::from_vec(vec)
-    }
+impl Word for u32 {
+    const ZERO: Self = 0;
 
-    fn from_vec<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> Self {
-        let bits = movemask(eq(vec, b'\n')).reverse_bits();
-        Self { bits }
-    }
+    type Vec = Simd<u8, 32>;
+    type Mask = Mask<i8, 32>;
 
-    fn first_set(&self) -> Option<usize> {
-        if self.bits == 0 {
-            None
-        } else {
-            Some(self.bits.leading_zeros() as usize)
-        }
+    unsafe fn load(ptr: *const u8) -> Self::Vec { unsafe { load::<32>(ptr) } }
+    fn eq(vec: Self::Vec, byte: u8) -> Self::Mask { vec.simd_eq(Simd::splat(byte)) }
+    fn in_range(vec: Self::Vec, start: u8, end: u8) -> Self::Mask {
+        Simd::splat(start).simd_le(vec) & vec.simd_le(Simd::splat(end))
     }
-
-    fn clear(&mut self, upto: usize) { self.bits &= u64::MAX >> upto; }
+    fn movemask(mask: Self::Mask) -> Self { movemask(mask) as Self }
 }
 
-#[derive(Debug)]
-struct LineCommentMask {
-    bits: u64,
+impl Word for u64 {
+    const ZERO: Self = 0;
+
+    type Vec = Simd<u8, 64>;
+    type Mask = Mask<i8, 64>;
+
+    unsafe fn load(ptr: *const u8) -> Self::Vec { unsafe { load::<64>(ptr) } }
+    fn eq(vec: Self::Vec, byte: u8) -> Self::Mask { vec.simd_eq(Simd::splat(byte)) }
+    fn in_range(vec: Self::Vec, start: u8, end: u8) -> Self::Mask {
+        Simd::splat(start).simd_le(vec) & vec.simd_le(Simd::splat(end))
+    }
+    fn movemask(mask: Self::Mask) -> Self { movemask(mask) }
 }
 
-impl LineCommentMask {
-    unsafe fn from_ptr<const VEC_LEN: usize>(ptr: *const u8) -> Self {
-        let vec = ptr.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
-        let bits = movemask(eq(vec, b'/')).reverse_bits();
-        let bits1 = bits << 1 | u64::from(ptr.add(VEC_LEN + 1).read() == b'/');
-        Self { bits }
-    }
+pub fn stage1_16(src: &[u8], out: &mut [Vec<u16>; NUM_VECS]) { stage1::<u16, 16>(src, out) }
+pub fn stage1_32(src: &[u8], out: &mut [Vec<u32>; NUM_VECS]) { stage1::<u32, 32>(src, out) }
+pub fn stage1_64(src: &[u8], out: &mut [Vec<u64>; NUM_VECS]) { stage1::<u64, 64>(src, out) }
 
-    fn first_set(&self) -> Option<usize> {
-        if self.bits == 0 {
-            None
-        } else {
-            Some(self.bits.leading_zeros() as usize)
-        }
-    }
+pub fn stage1<W: Word, const VEC_LEN: usize>(src: &[u8], out: &mut [Vec<W>; NUM_VECS]) {
+    const { assert!(VEC_LEN == size_of::<W>() * 8) }
 
-    fn clear(&mut self, upto: usize) { self.bits &= u64::MAX >> upto; }
-}
+    debug_assert_eq!(src.last_chunk(), Some(&[EOF_BYTE; VEC_LEN]));
 
-struct Cursor<const VEC_LEN: usize> {
-    cur:           *const u8,
-    src_end:       *const u8,
-    newlines:      BitString<VEC_LEN>,
-    line_comments: BitString<VEC_LEN>,
-}
+    let mut ptr = src.as_ptr();
+    let src_end = src.as_ptr_range().end;
 
-impl<const VEC_LEN: usize> Cursor<VEC_LEN> {
-    fn new(input: &[u8]) -> Self {
-        unsafe {
-            let std::ops::Range { start, end } = input.as_ptr_range();
-
-            let chunk = start.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
-            let newlines = BitString::new(movemask(eq(chunk, b'\n')).reverse_bits());
-            let slashes = movemask(eq(chunk, b'/')).reverse_bits();
-            let slashes1 = slashes << 1 | u64::from(start.add(VEC_LEN + 1).read() == b'/');
-            let line_comments = BitString::new(slashes & slashes1);
-
-            Self {
-                cur: start,
-                src_end: end,
-                newlines,
-                line_comments,
-            }
-        }
-    }
-
-    fn refill(&mut self) -> bool {
-        unsafe {
-            if self.cur.add(VEC_LEN) >= self.src_end {
-                return false;
-            }
-            self.cur = self.cur.add(VEC_LEN);
-
-            let chunk = unsafe { self.cur.cast::<Simd<u8, VEC_LEN>>().read_unaligned() };
-            let newlines = BitString::new(movemask(eq(chunk, b'\n')).reverse_bits());
-            let slashes = movemask(eq(chunk, b'/')).reverse_bits();
-            let slashes1 = slashes << 1 | u64::from(self.cur.add(VEC_LEN + 1).read() == b'/');
-            let line_comments = BitString::new(slashes & slashes1);
-            self.newlines = newlines;
-            self.line_comments = line_comments;
-            true
-        }
-    }
-
-    fn next_line_comment(&mut self) -> Option<*const u8> {
-        unsafe {
-            let pos = match self.line_comments.leading_zeros() {
-                pos if pos >= VEC_LEN => loop {
-                    match self.refill() {
-                        true => match self.line_comments.leading_zeros() {
-                            (pos) => break pos,
-                            pos if pos >= VEC_LEN => continue,
-                        },
-                        false => return None,
-                    }
-                },
-                pos => pos,
-            };
-
-            let comment_start_ptr = self.cur.add(pos);
-            debug_assert_eq!(comment_start_ptr.add(0).read(), b'/');
-            debug_assert_eq!(comment_start_ptr.add(1).read(), b'/');
-
-            self.line_comments = self.line_comments.shl(pos + 1);
-            self.newlines = self.newlines.shl(pos + 1);
-            Some(comment_start_ptr)
-        }
-    }
-
-    fn next_newline(&mut self) -> Option<*const u8> {
-        unsafe {
-            let pos = match self.newlines.leading_zeros() {
-                (pos) => pos,
-                pos if pos >= VEC_LEN => loop {
-                    match self.refill() {
-                        true => match self.newlines.leading_zeros() {
-                            (pos) => break pos,
-                            pos if pos >= VEC_LEN => continue,
-                        },
-                        false => return None,
-                    }
-                },
-            };
-            let newline_ptr = self.cur.add(pos);
-            debug_assert_eq!(newline_ptr.add(0).read(), b'\n');
-
-            self.line_comments = self.line_comments.shl(pos + 1);
-            self.newlines = self.newlines.shl(pos + 1);
-            Some(newline_ptr)
-        }
-    }
-}
-
-pub unsafe fn line_comments<const VEC_LEN: usize>(input: &[u8], mut out: *mut u8) -> *mut u8 {
-    debug_assert!(input.ends_with([[EOF_BYTE; VEC_LEN]; 2].as_flattened()));
-    unsafe {
-        let input = input
-            .strip_suffix([[EOF_BYTE; VEC_LEN]; 2].as_flattened())
-            .unwrap_unchecked();
-        let mut cursor = Cursor::<VEC_LEN>::new(input);
-        loop {
-            match cursor.next_line_comment() {
-                None => break,
-                Some(comment_start_ptr) => {
-                    out = write_and_advance(out, LINE_COMMENT);
-                    let Some(newline_ptr) = cursor.next_newline() else {
-                        let eof_ptr = cursor.src_end;
-                        let len = eof_ptr.offset_from_unsigned(comment_start_ptr) as u32;
-                        out = write_and_advance(out, len);
-                        break;
-                    };
-                    let len = newline_ptr.offset_from_unsigned(comment_start_ptr) as u32;
-                    out = write_and_advance(out, len);
-                }
-            }
-        }
-        out
-    }
-}
-
-/// Pass 1: Remove all line comments
-/// # Safety
-/// The caller must ensure that `input` ends with at least `VEC_LEN * 2` bytes
-/// of `EOF_BYTE`.
-#[cfg(false)]
-pub unsafe fn line_comments<const VEC_LEN: usize>(input: &[u8], mut out: *mut u8) -> *mut u8 {
-    debug_assert!(input.ends_with([[EOF_BYTE; VEC_LEN]; 2].as_flattened()));
-    let std::ops::Range { start, end } = input.as_ptr_range();
+    let [
+        newline_vec,
+        double_quote_vec,
+        single_quote_vec,
+        digits_vec,
+        ident_vec,
+    ] = out;
+    let mut newline_ptr = newline_vec.as_mut_ptr();
+    let mut double_quote_ptr = double_quote_vec.as_mut_ptr();
+    let mut single_quote_ptr = single_quote_vec.as_mut_ptr();
+    let mut digits_ptr = digits_vec.as_mut_ptr();
+    let mut ident_ptrs = ident_vec.as_mut_ptr();
 
     unsafe {
-        let src_end = end.sub(VEC_LEN * 2);
-        let mut cursor = start;
+        while ptr < src_end {
+            let vec = W::load(ptr);
+            let newlines = W::movemask(W::eq(vec, b'\n'));
+            let double_quotes = W::movemask(W::eq(vec, b'"'));
+            let single_quotes = W::movemask(W::eq(vec, b'\''));
+            let digits = W::movemask(W::eq(vec, b'_') | W::in_range(vec, b'0', b'9'));
+            let idents = W::movemask(W::in_range(vec, b'a', b'z') | W::in_range(vec, b'A', b'Z'));
 
-        let mut chunk = cursor.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
-        out.cast::<Simd<u8, VEC_LEN>>().write_unaligned(chunk);
-        let mut newlines = movemask(eq(chunk, b'\n')).reverse_bits();
-        let mut slashes = {
-            let first_slashes = movemask(eq(chunk, b'/')).reverse_bits();
-            let second_slashes = first_slashes << 1;
-            first_slashes & second_slashes
-        };
+            newline_ptr.write(newlines);
+            double_quote_ptr.write(double_quotes);
+            single_quote_ptr.write(single_quotes);
+            digits_ptr.write(digits);
+            ident_ptrs.write(idents);
 
-        let mut iter = 0;
-        'outer: loop {
-            eprintln!("iter\t= {iter}");
-            eprintln!("chunk\t= {:?}", ByteStr::new(&chunk.to_array()));
-            eprintln!("slashes\t=  {slashes:064b}");
-            eprintln!("newline\t=  {newlines:064b}");
-            iter += 1;
-
-            if slashes == 0 {
-                eprintln!("No '//' found, writing chunk and advancing");
-
-                // out = write_and_advance(out, chunk);
-                cursor = cursor.add(VEC_LEN);
-                if cursor >= src_end {
-                    break;
-                }
-
-                // Refill the bitmasks
-                chunk = cursor.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
-                newlines = movemask(eq(chunk, b'\n')).reverse_bits();
-                slashes = {
-                    let first_slashes = movemask(eq(chunk, b'/')).reverse_bits();
-                    let second_slashes =
-                        first_slashes << 1 | u64::from(cursor.add(VEC_LEN + 1).read() == b'/');
-                    first_slashes & second_slashes
-                };
-                continue;
-            }
-
-            let comment_start_pos = slashes.leading_zeros() as usize;
-
-            out = out.add(comment_start_pos);
-            out = write_and_advance(out, LINE_COMMENT);
-
-            let comment_start_ptr = cursor.add(comment_start_pos);
-
-            debug_assert_eq!(comment_start_ptr.add(0).read(), b'/');
-            debug_assert_eq!(comment_start_ptr.add(1).read(), b'/');
-
-            newlines &= (u64::MAX >> comment_start_pos);
-            slashes &= (u64::MAX >> comment_start_pos);
-
-            'inner: loop {
-                if newlines != 0 {
-                    let newline_pos = newlines.leading_zeros() as usize;
-                    newlines &= (u64::MAX >> newline_pos);
-                    slashes &= (u64::MAX >> newline_pos);
-                    let comment_end_ptr = cursor.add(newline_pos);
-                    debug_assert_eq!(comment_end_ptr.read(), b'\n');
-                    let comment_len = comment_end_ptr.offset_from_unsigned(comment_start_ptr);
-                    out = write_and_advance(out, comment_len as u32);
-                    break 'inner;
-                }
-
-                cursor = cursor.add(VEC_LEN);
-                let chunk = cursor.cast::<Simd<u8, VEC_LEN>>().read_unaligned();
-                newlines = movemask(eq(chunk, b'\n')).reverse_bits();
-                if cursor >= src_end {
-                    let comment_end_ptr = src_end;
-                    let comment_len = comment_end_ptr.offset_from_unsigned(comment_start_ptr);
-                    out = write_and_advance(out, comment_len as u32);
-                    break 'outer;
-                }
-            }
+            ptr = ptr.add(VEC_LEN);
+            newline_ptr = newline_ptr.add(1);
+            double_quote_ptr = double_quote_ptr.add(1);
+            single_quote_ptr = single_quote_ptr.add(1);
+            digits_ptr = digits_ptr.add(1);
+            ident_ptrs = ident_ptrs.add(1);
         }
-        out
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::bstr::ByteStr;
-
-    use expect_test::{Expect, expect};
-
-    use super::*;
-
-    fn check(src: &str, expect: &Expect) {
-        let mut input = src.to_string().into_bytes();
-        input.extend_from_slice(&[EOF_BYTE; 32]);
-        let mut output = vec![0u8; input.len()];
-
-        let out_start = output.as_ptr();
-        let out_end = unsafe { line_comments::<16>(&input, output.as_mut_ptr()) };
-        let out = out_start..out_end.cast_const();
-        let output = unsafe { std::slice::from_ptr_range(out) };
-        let output = ByteStr::new(output);
-        let output = format!("{output:?}");
-        let output = output.strip_prefix("\"").unwrap();
-        let output = output.strip_suffix("\"").unwrap();
-        expect.assert_eq(output);
-    }
-
-    #[test]
-    fn empty() { check("", &expect![""]); }
-
-    #[test]
-    fn no_comments() {
-        check("foo", &expect![""]);
-        check("foobar", &expect![""]);
-        check("foobar foobar foobar foobar foobar foobar foo", &expect![
-            ""
-        ]);
-    }
-
-    #[test]
-    fn line_comment1() { check("foo//\nbaz", &expect![[r#"\xfe\x02\0\0\0"#]]); }
-
-    #[test]
-    fn line_comment2() { check("foo//bar\n", &expect![[r#"\xfe\x05\0\0\0"#]]); }
-
-    #[test]
-    fn line_comment3() { check("foo//bar", &expect![[r#"\xfe\x05\0\0\0"#]]); }
-
-    #[test]
-    fn line_comment4() { check("//foobar\n", &expect![[r#"\xfe\x08\0\0\0"#]]); }
-
-    #[test]
-    fn line_comment5() { check("//foobar", &expect![[r"\xfe\x08\0\0\0"]]); }
-
-    #[test]
-    fn line_comment6() {
-        check(
-            "hello world\nfoo // line comment \n foooooobaaazbaaar \n // comment to EOF",
-            &expect![[r#"\xfe\x10\0\0\0\xfe\x11\0\0\0"#]],
-        );
-    }
-
-    #[test]
-    fn line_comments7() {
-        let src = r###"
-/// Pass 1: Remove all line comments
-/// # Safety
-/// The caller must ensure that `input` ends with at least `VEC_LEN * 2` bytes
-/// of `EOF_BYTE`.
-pub unsafe fn line_comments<const VEC_LEN: usize>(input: &[u8], mut out: *mut u8) -> *mut u8 {
-"###;
-        check(src, &expect![[
-            r#"\xfe$\0\0\0\xfe\x0c\0\0\0\xfeN\0\0\0\xfe\x12\0\0\0"#
-        ]]);
-    }
-
-    #[track_caller]
-    fn check_line_comment_positions(src: &str, expect: &Expect) {
-        let mut input = src.to_string().into_bytes();
-        input.extend_from_slice(&[EOF_BYTE; 32]);
-        let mut output = vec![0u32; input.len()];
-
-        unsafe {
-            let out = line_comment_starts::<16>(&input, output.as_mut_ptr().cast());
-            let output = std::slice::from_mut_ptr_range(output.as_mut_ptr()..out);
-            let output = format!("{output:?}");
-            expect.assert_eq(&output);
-        }
-    }
-
-    #[test]
-    fn line_comment_positions() {
-        check_line_comment_positions("", &expect!["[]"]);
-        check_line_comment_positions("/", &expect!["[]"]);
-        check_line_comment_positions("//", &expect![["[0]"]]);
-        check_line_comment_positions("///", &expect![["[0]"]]);
-        check_line_comment_positions("////", &expect![["[0, 2]"]]);
-        check_line_comment_positions("// //", &expect![["[0, 3]"]]);
-        check_line_comment_positions("   // //  ", &expect![["[3, 6]"]]);
     }
 }

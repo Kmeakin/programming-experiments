@@ -390,57 +390,15 @@ fn memcpy(c: &mut Criterion) {
     group.finish();
 }
 
-fn multi_pass(c: &mut Criterion) {
+fn multi_pass<W: multi_pass::Word, const VEC_LEN: usize>(c: &mut Criterion) {
     let input = get_input();
-    let mut input = input.into_bytes();
-    input.extend([multi_pass::EOF_BYTE; 128]);
-    let input = input.as_slice();
+    let (input, mut output) = multi_pass::prepare_input::<W, VEC_LEN>(&input);
 
     let mut group = c.benchmark_group("multi_pass");
 
     group.throughput(Throughput::Bytes(input.len() as u64));
-    group.bench_function("line_comment_starts::<16>", |b| {
-        let mut output = vec![0; input.len()];
-        b.iter(|| unsafe { multi_pass::line_comment_starts::<16>(input, output.as_mut_ptr()) });
-    });
-
-    group.throughput(Throughput::Bytes(input.len() as u64));
-    group.bench_function("line_comment_starts::<32>", |b| {
-        let mut output = vec![0; input.len()];
-        b.iter(|| unsafe { multi_pass::line_comment_starts::<32>(input, output.as_mut_ptr()) });
-    });
-
-    group.throughput(Throughput::Bytes(input.len() as u64));
-    group.bench_function("line_comment_starts::<64>", |b| {
-        let mut output = vec![0; input.len()];
-        b.iter(|| unsafe { multi_pass::line_comment_starts::<64>(input, output.as_mut_ptr()) });
-    });
-
-    group.throughput(Throughput::Bytes(input.len() as u64));
-    group.bench_function("line_comments::<16>", |b| {
-        let mut output = vec![multi_pass::EOF_BYTE; input.len()];
-        b.iter(|| unsafe {
-            let output = multi_pass::line_comments::<16>(input, output.as_mut_ptr());
-            black_box(output)
-        });
-    });
-
-    group.throughput(Throughput::Bytes(input.len() as u64));
-    group.bench_function("line_comments::<32>", |b| {
-        let mut output = vec![multi_pass::EOF_BYTE; input.len()];
-        b.iter(|| unsafe {
-            let output = multi_pass::line_comments::<32>(input, output.as_mut_ptr());
-            black_box(output)
-        });
-    });
-
-    group.throughput(Throughput::Bytes(input.len() as u64));
-    group.bench_function("line_comments::<64>", |b| {
-        let mut output = vec![multi_pass::EOF_BYTE; input.len()];
-        b.iter(|| unsafe {
-            let output = multi_pass::line_comments::<64>(input, output.as_mut_ptr());
-            black_box(output)
-        });
+    group.bench_function(format!("multi_pass/stage1::<{VEC_LEN}>"), |b| {
+        b.iter(|| multi_pass::stage1::<W, VEC_LEN>(&input, &mut output));
     });
 
     group.finish();
@@ -531,9 +489,9 @@ fn main() {
     raw_ptr::<32>(&mut criterion);
     raw_ptr::<64>(&mut criterion);
 
-    // multi_pass(&mut criterion);
-
-    // simd(&mut criterion);
+    multi_pass::<u16, 16>(&mut criterion);
+    multi_pass::<u32, 32>(&mut criterion);
+    multi_pass::<u64, 64>(&mut criterion);
 
     simd2::<16>(&mut criterion);
     simd2::<32>(&mut criterion);
