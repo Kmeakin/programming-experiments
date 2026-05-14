@@ -5,7 +5,7 @@ use std::simd::prelude::*;
 
 use crate::TokenKind;
 use crate::utils::simdx::*;
-use crate::utils::{is_punct, write_punct, write_token};
+use crate::utils::{align_down, is_punct, write_punct, write_token};
 
 pub const EOF_BYTE: u8 = 0xFF;
 const NUM_VECS: usize = 3;
@@ -111,8 +111,8 @@ pub fn stage1<W: Word, const VEC_LEN: usize>(src: &[u8], out: &mut [Vec<W>; NUM_
     let mut ptr = src.as_ptr();
     let src_end = src.as_ptr_range().end;
 
-    let [whitespace_vec, ident_vec, double_quote_vec] = out;
-    let mut whitespace_ptr = whitespace_vec.as_mut_ptr();
+    let [newlines, ident_vec, double_quote_vec] = out;
+    let mut newlines_ptr = newlines.as_mut_ptr();
     let mut ident_ptr = ident_vec.as_mut_ptr();
     let mut double_quote_ptr = double_quote_vec.as_mut_ptr();
 
@@ -120,14 +120,7 @@ pub fn stage1<W: Word, const VEC_LEN: usize>(src: &[u8], out: &mut [Vec<W>; NUM_
         while ptr < src_end {
             let vec = W::load(ptr);
 
-            let whitespace = W::movemask(
-                W::eq(vec, b' ')
-                    | W::eq(vec, b'\t')
-                    | W::eq(vec, b'\n')
-                    | W::eq(vec, b'\x0B')
-                    | W::eq(vec, b'\x0C')
-                    | W::eq(vec, b'\r'),
-            );
+            let newlines = W::movemask(W::eq(vec, b'\n'));
             let idents = W::movemask(
                 W::eq(vec, b'_')
                     | W::in_range(vec, b'0', b'9')
@@ -136,11 +129,11 @@ pub fn stage1<W: Word, const VEC_LEN: usize>(src: &[u8], out: &mut [Vec<W>; NUM_
             );
             let double_quotes = W::movemask(W::eq(vec, b'"'));
 
-            whitespace_ptr.write(whitespace);
+            newlines_ptr.write(newlines);
             ident_ptr.write(idents);
             double_quote_ptr.write(double_quotes);
 
-            whitespace_ptr = whitespace_ptr.add(1);
+            newlines_ptr = newlines_ptr.add(1);
             ident_ptr = ident_ptr.add(1);
             double_quote_ptr = double_quote_ptr.add(1);
             ptr = ptr.add(VEC_LEN);
@@ -224,10 +217,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
 
                 b'/' => match src.add(1).read() {
                     b'/' => {
-                        src = src.add(2);
-                        while src.read() != b'\n' && src < src_end {
-                            src = src.add(1);
-                        }
+                        src = eat_line_comment::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::LineComment, token_start, src);
                     }
                     b'*' => {
@@ -340,7 +330,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::Byte, token_start, src);
                     }
                     _ => {
-                        src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
+                        src = eat_ident::<W, VEC_LEN>(src_start, src, bitmasks);
                         out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
@@ -361,7 +351,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::CStr, token_start, src);
                     }
                     _ => {
-                        src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
+                        src = eat_ident::<W, VEC_LEN>(src_start, src, bitmasks);
                         out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
@@ -373,7 +363,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                     }
                     [b'#', b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'] => {
                         src = src.add(2);
-                        src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
+                        src = eat_ident::<W, VEC_LEN>(src_start, src, bitmasks);
                         out = write_token(out, TokenKind::RawIdent, token_start, src);
                     }
                     [b'#', _] => {
@@ -382,13 +372,13 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::RawStr, token_start, src);
                     }
                     _ => {
-                        src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
+                        src = eat_ident::<W, VEC_LEN>(src_start, src, bitmasks);
                         out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
 
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                    src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
+                    src = eat_ident::<W, VEC_LEN>(src_start, src, bitmasks);
                     out = write_token(out, TokenKind::Ident, token_start, src);
                 }
                 b'0'..=b'9' => {
@@ -418,7 +408,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                         src = src.add(usize::from(matches!(src.read(), b'+' | b'-')));
                     }
 
-                    src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
+                    src = eat_ident::<W, VEC_LEN>(src_start, src, bitmasks);
                     out = write_token(out, kind, token_start, src);
                 }
 
@@ -432,10 +422,64 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
     }
 }
 
-fn eat_ident<W: Word, const VEC_LEN: usize>(
+fn eat_whitespace<W: Word, const VEC_LEN: usize>(
+    src_start: *const u8,
+    mut src: *const u8,
+    bitmasks: [&[W]; NUM_VECS],
+) -> *const u8 {
+    unsafe {
+        let byte_idx = src.offset_from_unsigned(src_start);
+        let mut word_idx = byte_idx / VEC_LEN;
+        let mut chunk_offset = byte_idx % VEC_LEN;
+
+        loop {
+            let word = bitmasks[0][word_idx];
+            let len = (word >> chunk_offset).trailing_ones();
+            src = src.add(len);
+            if chunk_offset + len < VEC_LEN {
+                break;
+            }
+            chunk_offset = 0;
+            word_idx += 1;
+        }
+
+        src
+    }
+}
+
+fn eat_line_comment<W: Word, const VEC_LEN: usize>(
     src_start: *const u8,
     mut src: *const u8,
     src_end: *const u8,
+    bitmasks: [&[W]; NUM_VECS],
+) -> *const u8 {
+    unsafe {
+        let byte_idx = src.offset_from_unsigned(src_start);
+        let mut word_idx = byte_idx / VEC_LEN;
+        let mut chunk_ptr = align_down::<VEC_LEN>(src);
+        let mut chunk_offset = src.offset_from_unsigned(chunk_ptr);
+
+        loop {
+            let word = bitmasks[0][word_idx];
+            let len = (word >> chunk_offset).trailing_zeros();
+            if chunk_offset + len < VEC_LEN {
+                src = chunk_ptr.add(chunk_offset + len);
+                debug_assert_eq!(src.read(), b'\n');
+                return src;
+            }
+            chunk_offset = 0;
+            word_idx += 1;
+            chunk_ptr = chunk_ptr.add(VEC_LEN);
+            if chunk_ptr >= src_end {
+                return src_end;
+            }
+        }
+    }
+}
+
+fn eat_ident<W: Word, const VEC_LEN: usize>(
+    src_start: *const u8,
+    mut src: *const u8,
     bitmasks: [&[W]; NUM_VECS],
 ) -> *const u8 {
     unsafe {
@@ -825,6 +869,10 @@ mod tests {
             (RCurly, 24..25, "}")
             (Tilde, 25..26, "~")
         "##]]);
+    }
+
+    #[test]
+    fn punct2() {
         check("!#///*\n", &expect![[r##"
             (Bang, 0..1, "!")
             (Hash, 1..2, "#")
