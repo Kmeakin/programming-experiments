@@ -250,7 +250,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                 },
 
                 b'"' => {
-                    src = eat_string::<W, VEC_LEN>(src, src_end, bitmasks);
+                    src = eat_string::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                     out = write_token(out, TokenKind::Str, token_start, src);
                 }
                 b'\'' => {
@@ -305,7 +305,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                     }
                     [b'"', _] => {
                         src = src.add(1);
-                        src = eat_string::<W, VEC_LEN>(src, src_end, bitmasks);
+                        src = eat_string::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::ByteStr, token_start, src);
                     }
                     [b'\'', _] => {
@@ -348,7 +348,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                     }
                     [b'"', _] => {
                         src = src.add(1);
-                        src = eat_string::<W, VEC_LEN>(src, src_end, bitmasks);
+                        src = eat_string::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::CStr, token_start, src);
                     }
                     _ => {
@@ -537,8 +537,8 @@ fn eat_raw_string<W: Word, const VEC_LEN: usize>(
     }
 }
 
-#[cfg(false)]
-fn eat_raw_string<W: Word, const VEC_LEN: usize>(
+fn eat_string<W: Word, const VEC_LEN: usize>(
+    src_start: *const u8,
     mut src: *const u8,
     src_end: *const u8,
     bitmasks: [&[W]; NUM_VECS],
@@ -547,20 +547,45 @@ fn eat_raw_string<W: Word, const VEC_LEN: usize>(
         debug_assert_eq!(src.read(), b'"');
         src = src.add(1);
 
+        let byte_idx = src.offset_from_unsigned(src_start);
+        let mut word_idx = byte_idx / VEC_LEN;
+        let mut chunk_ptr = align_down::<VEC_LEN>(src);
+        let mut chunk_offset = src.offset_from_unsigned(chunk_ptr);
+
         loop {
-            match src.read() {
-                b'"' => {
-                    src = src.add(1);
-                    break;
+            let word = bitmasks[2][word_idx];
+            let len = (word >> chunk_offset).trailing_zeros();
+            if chunk_offset + len < VEC_LEN {
+                src = chunk_ptr.add(chunk_offset + len);
+                debug_assert_eq!(src.read(), b'"');
+
+                let mut src_back = src.sub(1);
+                src = src.add(1);
+                let mut num_backslashes = 0;
+
+                while src_back.read() == b'\\' {
+                    num_backslashes += 1;
+                    src_back = src_back.sub(1);
                 }
-                EOF_BYTE => break,
-                _ => src = src.add(1),
+                if num_backslashes % 2 == 0 {
+                    return src;
+                }
+                chunk_offset += len + 1;
+                if chunk_offset < VEC_LEN {
+                    continue;
+                }
+            }
+            chunk_offset = 0;
+            word_idx += 1;
+            chunk_ptr = chunk_ptr.add(VEC_LEN);
+            if chunk_ptr >= src_end {
+                return src_end;
             }
         }
-        src
     }
 }
 
+#[cfg(false)]
 fn eat_string<W: Word, const VEC_LEN: usize>(
     mut src: *const u8,
     src_end: *const u8,
