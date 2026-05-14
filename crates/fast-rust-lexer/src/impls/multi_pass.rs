@@ -1,6 +1,6 @@
 #![allow(clippy::wildcard_imports)]
 
-use std::ops::BitOr;
+use std::ops::{BitOr, Shr};
 use std::simd::prelude::*;
 
 use crate::TokenKind;
@@ -32,7 +32,7 @@ pub fn prepare_input<W: Word, const VEC_LEN: usize>(src: &str) -> (Vec<u8>, [Vec
     }
 }
 
-pub trait Word: Copy {
+pub trait Word: Copy + Shr<usize, Output = Self> {
     const ZERO: Self;
 
     type Vec: Copy;
@@ -44,6 +44,8 @@ pub trait Word: Copy {
     fn eq(vec: Self::Vec, byte: u8) -> Self::Mask;
     fn in_range(vec: Self::Vec, start: u8, end: u8) -> Self::Mask;
     fn movemask(mask: Self::Mask) -> Self;
+    fn trailing_zeros(self) -> usize;
+    fn trailing_ones(self) -> usize;
 }
 
 impl Word for u16 {
@@ -58,6 +60,8 @@ impl Word for u16 {
         Simd::splat(start).simd_le(vec) & vec.simd_le(Simd::splat(end))
     }
     fn movemask(mask: Self::Mask) -> Self { movemask(mask) as Self }
+    fn trailing_zeros(self) -> usize { self.trailing_zeros() as usize }
+    fn trailing_ones(self) -> usize { self.trailing_ones() as usize }
 }
 
 impl Word for u32 {
@@ -72,6 +76,8 @@ impl Word for u32 {
         Simd::splat(start).simd_le(vec) & vec.simd_le(Simd::splat(end))
     }
     fn movemask(mask: Self::Mask) -> Self { movemask(mask) as Self }
+    fn trailing_zeros(self) -> usize { self.trailing_zeros() as usize }
+    fn trailing_ones(self) -> usize { self.trailing_ones() as usize }
 }
 
 impl Word for u64 {
@@ -86,6 +92,8 @@ impl Word for u64 {
         Simd::splat(start).simd_le(vec) & vec.simd_le(Simd::splat(end))
     }
     fn movemask(mask: Self::Mask) -> Self { movemask(mask) }
+    fn trailing_zeros(self) -> usize { self.trailing_zeros() as usize }
+    fn trailing_ones(self) -> usize { self.trailing_ones() as usize }
 }
 
 pub fn stage1_16(src: &[u8], out: &mut [Vec<u16>; NUM_VECS]) { stage1::<u16, 16>(src, out) }
@@ -140,6 +148,30 @@ pub fn stage1<W: Word, const VEC_LEN: usize>(src: &[u8], out: &mut [Vec<W>; NUM_
     }
 }
 
+pub fn stage2_16<'out>(
+    src: &[u8],
+    bitmasks: [&[u16]; NUM_VECS],
+    out: &'out mut [u8],
+) -> &'out mut [u8] {
+    stage2::<u16, 16>(src, bitmasks, out)
+}
+
+pub fn stage2_32<'out>(
+    src: &[u8],
+    bitmasks: [&[u32]; NUM_VECS],
+    out: &'out mut [u8],
+) -> &'out mut [u8] {
+    stage2::<u32, 32>(src, bitmasks, out)
+}
+
+pub fn stage2_64<'out>(
+    src: &[u8],
+    bitmasks: [&[u64]; NUM_VECS],
+    out: &'out mut [u8],
+) -> &'out mut [u8] {
+    stage2::<u64, 64>(src, bitmasks, out)
+}
+
 pub fn stage2<'out, W: Word, const VEC_LEN: usize>(
     src: &[u8],
     bitmasks: [&[W]; NUM_VECS],
@@ -163,6 +195,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
     mut out: *mut u8,
 ) -> *mut u8 {
     unsafe {
+        let src_start = src;
         loop {
             let token_start = src;
             let byte = src.read();
@@ -307,10 +340,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::Byte, token_start, src);
                     }
                     _ => {
-                        src = src.add(1);
-                        while let b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'0'..=b'9' = src.read() {
-                            src = src.add(1);
-                        }
+                        src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
@@ -331,10 +361,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::CStr, token_start, src);
                     }
                     _ => {
-                        src = src.add(1);
-                        while let b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'0'..=b'9' = src.read() {
-                            src = src.add(1);
-                        }
+                        src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
@@ -346,9 +373,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                     }
                     [b'#', b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'] => {
                         src = src.add(2);
-                        while let b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'0'..=b'9' = src.read() {
-                            src = src.add(1);
-                        }
+                        src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::RawIdent, token_start, src);
                     }
                     [b'#', _] => {
@@ -357,19 +382,13 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                         out = write_token(out, TokenKind::RawStr, token_start, src);
                     }
                     _ => {
-                        src = src.add(1);
-                        while let b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'0'..=b'9' = src.read() {
-                            src = src.add(1);
-                        }
+                        src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::Ident, token_start, src);
                     }
                 },
 
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                    src = src.add(1);
-                    while let b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'0'..=b'9' = src.read() {
-                        src = src.add(1);
-                    }
+                    src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                     out = write_token(out, TokenKind::Ident, token_start, src);
                 }
                 b'0'..=b'9' => {
@@ -399,9 +418,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                         src = src.add(usize::from(matches!(src.read(), b'+' | b'-')));
                     }
 
-                    while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = src.read() {
-                        src = src.add(1);
-                    }
+                    src = eat_ident::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                     out = write_token(out, kind, token_start, src);
                 }
 
@@ -412,6 +429,32 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                 }
             }
         }
+    }
+}
+
+fn eat_ident<W: Word, const VEC_LEN: usize>(
+    src_start: *const u8,
+    mut src: *const u8,
+    src_end: *const u8,
+    bitmasks: [&[W]; NUM_VECS],
+) -> *const u8 {
+    unsafe {
+        let byte_idx = src.offset_from_unsigned(src_start);
+        let mut word_idx = byte_idx / VEC_LEN;
+        let mut chunk_offset = byte_idx % VEC_LEN;
+
+        loop {
+            let word = bitmasks[1][word_idx];
+            let len = (word >> chunk_offset).trailing_ones();
+            src = src.add(len);
+            if chunk_offset + len < VEC_LEN {
+                break;
+            }
+            chunk_offset = 0;
+            word_idx += 1;
+        }
+
+        src
     }
 }
 

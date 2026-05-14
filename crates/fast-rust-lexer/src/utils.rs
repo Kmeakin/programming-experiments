@@ -32,6 +32,7 @@ pub unsafe fn write_and_advance<T>(out: *mut u8, val: T) -> *mut u8 {
 }
 
 #[must_use]
+#[track_caller]
 pub unsafe fn write_token(
     out: *mut u8,
     kind: TokenKind,
