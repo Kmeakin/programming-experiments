@@ -1,3 +1,5 @@
+use crate::TokenKind;
+
 pub mod bitstring;
 pub mod simdx;
 pub mod tbl;
@@ -26,6 +28,37 @@ pub unsafe fn write_and_advance<T>(out: *mut u8, val: T) -> *mut u8 {
     unsafe {
         out.cast::<T>().write_unaligned(val);
         out.add(size_of::<T>())
+    }
+}
+
+#[must_use]
+pub unsafe fn write_token(
+    out: *mut u8,
+    kind: TokenKind,
+    start: *const u8,
+    end: *const u8,
+) -> *mut u8 {
+    unsafe {
+        let len = end.offset_from_unsigned(start) as u32;
+        debug_assert_ne!(len, 0);
+        let out = write_and_advance(out, kind as u8);
+        write_and_advance(out, len)
+    }
+}
+
+#[must_use]
+pub unsafe fn write_punct(out: *mut u8, kind: u8) -> *mut u8 {
+    unsafe { write_and_advance(out, kind) }
+}
+
+#[inline]
+pub fn is_punct(b: u8) -> bool {
+    #[allow(clippy::match_like_matches_macro)]
+    match b {
+        | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+' | b'-' | b'*'
+        | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@' | b'.' | b'!' | b'>'
+        | b'<' | b'^' => true,
+        _ => false,
     }
 }
 

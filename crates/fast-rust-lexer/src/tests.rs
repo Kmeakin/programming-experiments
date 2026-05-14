@@ -1,4 +1,4 @@
-use crate::{TokenKind, raw_ptr, simd, simd2, simd3};
+use crate::{TokenKind, multi_pass, raw_ptr, simd, simd2, simd3};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -121,6 +121,35 @@ fn lex_simd3<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
     tokens
 }
 
+fn lex_multi_pass<W: multi_pass::Word, const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
+    use multi_pass::*;
+
+    let (input, mut bitmask_vecs) = prepare_input::<W, VEC_LEN>(input);
+    stage1::<W, VEC_LEN>(&input, &mut bitmask_vecs);
+    let bitmask_slices = bitmask_vecs.each_ref().map(Vec::as_slice);
+
+    let mut out = vec![EOF_BYTE; input.len() * 10];
+    let buf = stage2::<W, VEC_LEN>(&input, bitmask_slices, &mut out);
+    let mut out_iter = buf.iter().copied();
+
+    let mut decoded = Vec::new();
+    while let Some(kind) = out_iter.next() {
+        if kind == EOF_BYTE {
+            break;
+        }
+        let Some(kind) = TokenKind::from_u8(kind) else {
+            panic!("Invalid token kind byte: {kind} ({kind:#04x})");
+        };
+        let len = match kind.is_punct() {
+            true => 1,
+            false => u32::from_ne_bytes(out_iter.next_chunk().expect("Expected length byte")),
+        };
+        decoded.push((kind, len));
+    }
+
+    decoded
+}
+
 #[track_caller]
 fn check(impl_fn: impl Fn(&str) -> Vec<(TokenKind, u32)>) {
     let input = std::fs::read_to_string(format!("{CRATE_ROOT}/test-data/rustc.rs")).unwrap();
@@ -190,3 +219,12 @@ fn test_simd3_32() { check(lex_simd3::<32>); }
 
 #[test]
 fn test_simd3_64() { check(lex_simd3::<64>); }
+
+#[test]
+fn test_multi_pass_16() { check(lex_multi_pass::<u16, 16>); }
+
+#[test]
+fn test_multi_pass_32() { check(lex_multi_pass::<u32, 32>); }
+
+#[test]
+fn test_multi_pass_64() { check(lex_multi_pass::<u64, 64>); }

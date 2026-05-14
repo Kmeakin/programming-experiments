@@ -392,13 +392,26 @@ fn memcpy(c: &mut Criterion) {
 
 fn multi_pass<W: multi_pass::Word, const VEC_LEN: usize>(c: &mut Criterion) {
     let input = get_input();
-    let (input, mut output) = multi_pass::prepare_input::<W, VEC_LEN>(&input);
+    let (input, mut bitmasks) = multi_pass::prepare_input::<W, VEC_LEN>(&input);
 
     let mut group = c.benchmark_group("multi_pass");
 
     group.throughput(Throughput::Bytes(input.len() as u64));
     group.bench_function(format!("multi_pass/stage1::<{VEC_LEN}>"), |b| {
-        b.iter(|| multi_pass::stage1::<W, VEC_LEN>(&input, &mut output));
+        b.iter(|| multi_pass::stage1::<W, VEC_LEN>(&input, &mut bitmasks));
+    });
+
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function(format!("multi_pass/stage2::<{VEC_LEN}>"), |b| {
+        let mut output = vec![0xff; input.len() * 5];
+        b.iter(|| {
+            let out = multi_pass::stage2::<W, VEC_LEN>(
+                &input,
+                bitmasks.each_ref().map(Vec::as_slice),
+                &mut output,
+            );
+            black_box(out);
+        });
     });
 
     group.finish();

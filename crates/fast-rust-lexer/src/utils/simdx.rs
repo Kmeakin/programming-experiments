@@ -16,7 +16,7 @@ pub unsafe fn load<const VEC_LEN: usize>(ptr: *const u8) -> Simd<u8, VEC_LEN> {
     unsafe {
         debug_assert!(ptr.is_aligned_to(VEC_LEN));
         cfg_select! {
-            target_arch = "aarch64" => aarch64::load(ptr),
+            target_arch = "aarch64" => aarch64::load::<false, VEC_LEN>(ptr),
             target_arch = "x86_64" => ptr.cast::<Simd<u8, VEC_LEN>>().read()
         }
     }
@@ -24,9 +24,9 @@ pub unsafe fn load<const VEC_LEN: usize>(ptr: *const u8) -> Simd<u8, VEC_LEN> {
 
 #[must_use]
 #[inline]
-pub fn movemask<const N: usize>(mask: Mask<i8, N>) -> u64 {
+pub fn movemask<const VEC_LEN: usize>(mask: Mask<i8, VEC_LEN>) -> u64 {
     cfg_select! {
-        target_arch = "aarch64" => aarch64::movemask(mask),
+        target_arch = "aarch64" => aarch64::movemask::<false, VEC_LEN>(mask),
         target_arch = "x86_64" => mask.to_bitmask()
     }
 }
@@ -49,6 +49,14 @@ mod aarch64 {
     use std::mem::transmute;
     use std::simd::prelude::*;
 
+    #[rustfmt::skip]
+    const POWERS_OF_2: uint8x16_t = unsafe {
+        transmute::<[u8; 16], uint8x16_t>([
+            0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
+            0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
+        ])
+    };
+
     #[allow(improper_ctypes)]
     unsafe extern "C" {
         #[link_name = "llvm.aarch64.neon.vsri.v16i8"]
@@ -56,17 +64,26 @@ mod aarch64 {
 
         #[link_name = "llvm.aarch64.neon.ld4.v16i8"]
         pub fn vld4q_u8(ptr: *const u8) -> uint8x16x4_t;
+
+        #[link_name = "llvm.aarch64.neon.addp.v16i8"]
+        pub fn vpaddq_u8(a: uint8x16_t, b: uint8x16_t) -> uint8x16_t;
     }
 
     #[must_use]
     #[inline]
     #[allow(clippy::cast_ptr_alignment)]
-    pub unsafe fn load<const VEC_LEN: usize>(ptr: *const u8) -> Simd<u8, VEC_LEN> {
+    pub unsafe fn load<const INTERLEAVED: bool, const VEC_LEN: usize>(
+        ptr: *const u8,
+    ) -> Simd<u8, VEC_LEN> {
         unsafe {
-            match VEC_LEN {
-                16 => transmute::<uint16x4x2_t, u8x16>(vld2_u16(ptr.cast::<u16>())).resize(0),
-                32 => transmute::<uint16x8x2_t, u8x32>(vld2q_u16(ptr.cast::<u16>())).resize(0),
-                64 => transmute::<uint8x16x4_t, u8x64>(vld4q_u8(ptr.cast::<u8>())).resize(0),
+            match (INTERLEAVED, VEC_LEN) {
+                (false, 16) => transmute::<uint8x16_t, u8x16>(vld1q_u8(ptr)).resize(0),
+                (false, 32) => transmute::<uint8x16x2_t, u8x32>(vld1q_u8_x2(ptr)).resize(0),
+                (false, 64) => transmute::<uint8x16x4_t, u8x64>(vld1q_u8_x4(ptr)).resize(0),
+
+                (_, 16) => transmute::<uint16x4x2_t, u8x16>(vld2_u16(ptr.cast::<u16>())).resize(0),
+                (_, 32) => transmute::<uint16x8x2_t, u8x32>(vld2q_u16(ptr.cast::<u16>())).resize(0),
+                (_, 64) => transmute::<uint8x16x4_t, u8x64>(vld4q_u8(ptr)).resize(0),
                 _ => unreachable!(),
             }
         }
@@ -115,13 +132,68 @@ mod aarch64 {
         }
     }
 
+    #[inline]
+    pub fn movemask16(vec: Mask<i8, 16>) -> u16 {
+        unsafe {
+            let mut v0 = transmute::<Mask<i8, 16>, uint8x16_t>(vec);
+
+            v0 = vandq_u8(v0, POWERS_OF_2);
+
+            let sum0 = vpaddq_u8(v0, v0);
+            let sum1 = vpaddq_u8(sum0, sum0);
+            let sum2 = vpaddq_u8(sum1, sum1);
+
+            vgetq_lane_u16(vreinterpretq_u16_u8(sum2), 0)
+        }
+    }
+
+    #[inline]
+    pub fn movemask32(vec: Mask<i8, 32>) -> u32 {
+        unsafe {
+            let uint8x16x2_t(mut v0, mut v1) = transmute::<Mask<i8, 32>, uint8x16x2_t>(vec);
+
+            v0 = vandq_u8(v0, POWERS_OF_2);
+            v1 = vandq_u8(v1, POWERS_OF_2);
+
+            let sum0 = vpaddq_u8(v0, v1);
+            let sum1 = vpaddq_u8(sum0, sum0);
+            let sum2 = vpaddq_u8(sum1, sum1);
+
+            vgetq_lane_u32(vreinterpretq_u32_u8(sum2), 0)
+        }
+    }
+
+    #[inline]
+    pub fn movemask64(vec: Mask<i8, 64>) -> u64 {
+        unsafe {
+            let uint8x16x4_t(mut v0, mut v1, mut v2, mut v3) =
+                transmute::<Mask<i8, 64>, uint8x16x4_t>(vec);
+
+            v0 = vandq_u8(v0, POWERS_OF_2);
+            v1 = vandq_u8(v1, POWERS_OF_2);
+            v2 = vandq_u8(v2, POWERS_OF_2);
+            v3 = vandq_u8(v3, POWERS_OF_2);
+
+            let sum0 = vpaddq_u8(v0, v1);
+            let sum1 = vpaddq_u8(v2, v3);
+            let sum2 = vpaddq_u8(sum0, sum1);
+            let sum3 = vpaddq_u8(sum2, sum2);
+
+            vgetq_lane_u64(vreinterpretq_u64_u8(sum3), 0)
+        }
+    }
+
     /// `Mask::to_bitmask` is suboptimal on `AArch64`.
     #[inline]
-    pub fn movemask<const N: usize>(mask: Mask<i8, N>) -> u64 {
-        match N {
-            16 => u64::from(movemask_interleaved16(mask.resize::<16>(false))),
-            32 => u64::from(movemask_interleaved32(mask.resize::<32>(false))),
-            64 => movemask_interleaved64(mask.resize::<64>(false)),
+    pub fn movemask<const INTERLEAVED: bool, const N: usize>(mask: Mask<i8, N>) -> u64 {
+        match (INTERLEAVED, N) {
+            (false, 16) => u64::from(movemask16(mask.resize::<16>(false))),
+            (false, 32) => u64::from(movemask32(mask.resize::<32>(false))),
+            (false, 64) => movemask64(mask.resize::<64>(false)),
+
+            (true, 16) => u64::from(movemask_interleaved16(mask.resize::<16>(false))),
+            (true, 32) => u64::from(movemask_interleaved32(mask.resize::<32>(false))),
+            (true, 64) => movemask_interleaved64(mask.resize::<64>(false)),
             _ => panic!("Unsupported vector length"),
         }
     }
