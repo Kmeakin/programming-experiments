@@ -217,6 +217,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
 
                 b'/' => match src.add(1).read() {
                     b'/' => {
+                        src = src.add(2);
                         src = eat_line_comment::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::LineComment, token_start, src);
                     }
@@ -294,7 +295,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                 b'b' => match &src.add(1).cast::<[u8; 2]>().read() {
                     [b'r', b'"'] => {
                         src = src.add(2);
-                        src = eat_raw_string::<W, VEC_LEN>(src, src_end, bitmasks);
+                        src = eat_raw_string::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::RawByteStr, token_start, src);
                     }
                     [b'r', b'#'] => {
@@ -337,7 +338,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                 b'c' => match &src.add(1).cast::<[u8; 2]>().read() {
                     [b'r', b'"'] => {
                         src = src.add(2);
-                        src = eat_raw_string::<W, VEC_LEN>(src, src_end, bitmasks);
+                        src = eat_raw_string::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::RawCStr, token_start, src);
                     }
                     [b'r', b'#'] => {
@@ -358,7 +359,7 @@ fn stage2_inner<W: Word, const VEC_LEN: usize>(
                 b'r' => match &src.add(1).cast::<[u8; 2]>().read() {
                     [b'"', _] => {
                         src = src.add(1);
-                        src = eat_raw_string::<W, VEC_LEN>(src, src_end, bitmasks);
+                        src = eat_raw_string::<W, VEC_LEN>(src_start, src, src_end, bitmasks);
                         out = write_token(out, TokenKind::RawStr, token_start, src);
                     }
                     [b'#', b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_'] => {
@@ -502,6 +503,41 @@ fn eat_ident<W: Word, const VEC_LEN: usize>(
     }
 }
 
+fn eat_raw_string<W: Word, const VEC_LEN: usize>(
+    src_start: *const u8,
+    mut src: *const u8,
+    src_end: *const u8,
+    bitmasks: [&[W]; NUM_VECS],
+) -> *const u8 {
+    unsafe {
+        debug_assert_eq!(src.read(), b'"');
+        src = src.add(1);
+
+        let byte_idx = src.offset_from_unsigned(src_start);
+        let mut word_idx = byte_idx / VEC_LEN;
+        let mut chunk_ptr = align_down::<VEC_LEN>(src);
+        let mut chunk_offset = src.offset_from_unsigned(chunk_ptr);
+
+        loop {
+            let word = bitmasks[2][word_idx];
+            let len = (word >> chunk_offset).trailing_zeros();
+            if chunk_offset + len < VEC_LEN {
+                src = chunk_ptr.add(chunk_offset + len);
+                debug_assert_eq!(src.read(), b'"');
+                src = src.add(1);
+                return src;
+            }
+            chunk_offset = 0;
+            word_idx += 1;
+            chunk_ptr = chunk_ptr.add(VEC_LEN);
+            if chunk_ptr >= src_end {
+                return src_end;
+            }
+        }
+    }
+}
+
+#[cfg(false)]
 fn eat_raw_string<W: Word, const VEC_LEN: usize>(
     mut src: *const u8,
     src_end: *const u8,
