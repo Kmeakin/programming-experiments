@@ -305,16 +305,6 @@ pub fn stage2<const VEC_LEN: usize>(src: &[u8], indexes: &[u32]) -> Vec<(TokenKi
                 tokens.push((TokenKind::Whitespace, start, end));
                 start = end;
             }
-            b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                let end = indexes.next().unwrap();
-                tokens.push((TokenKind::Ident, start, end));
-                start = end;
-            }
-            b'0'..=b'9' => {
-                let end = indexes.next().unwrap();
-                tokens.push((TokenKind::Int, start, end));
-                start = end;
-            }
             b'"' => {
                 let inclusive_end = indexes.next().unwrap();
                 let exclusive_end = indexes.next().unwrap();
@@ -326,6 +316,55 @@ pub fn stage2<const VEC_LEN: usize>(src: &[u8], indexes: &[u32]) -> Vec<(TokenKi
                 tokens.push((TokenKind::Str, start, exclusive_end));
                 start = exclusive_end;
             }
+            b'b' if src[start as usize + 1] == b'"' => {
+                let str_start = indexes.next().unwrap();
+                debug_assert_eq!(
+                    str_start,
+                    start + 1,
+                    "start = {start}, str_start = {str_start}"
+                );
+
+                let str_inclusive_end = indexes.next().unwrap();
+                let str_exclusive_end = indexes.next().unwrap();
+                debug_assert_eq!(
+                    str_inclusive_end + 1,
+                    str_exclusive_end,
+                    "str_inclusive_end = {str_inclusive_end}, str_exclusive_end = \
+                     {str_exclusive_end}"
+                );
+                tokens.push((TokenKind::ByteStr, start, str_exclusive_end));
+                start = str_exclusive_end;
+            }
+            b'c' if src[start as usize + 1] == b'"' => {
+                let str_start = indexes.next().unwrap();
+                debug_assert_eq!(
+                    str_start,
+                    start + 1,
+                    "start = {start}, str_start = {str_start}"
+                );
+
+                let str_inclusive_end = indexes.next().unwrap();
+                let str_exclusive_end = indexes.next().unwrap();
+                debug_assert_eq!(
+                    str_inclusive_end + 1,
+                    str_exclusive_end,
+                    "str_inclusive_end = {str_inclusive_end}, str_exclusive_end = \
+                     {str_exclusive_end}"
+                );
+                tokens.push((TokenKind::CStr, start, str_exclusive_end));
+                start = str_exclusive_end;
+            }
+            b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
+                let end = indexes.next().unwrap();
+                tokens.push((TokenKind::Ident, start, end));
+                start = end;
+            }
+            b'0'..=b'9' => {
+                let end = indexes.next().unwrap();
+                tokens.push((TokenKind::Int, start, end));
+                start = end;
+            }
+
             b'\'' => todo!(),
             EOF_BYTE => break,
             b => todo!("unhandled byte: 0x{b:02x}"),
@@ -385,7 +424,7 @@ mod stage1_tests {
 
     #[test]
     fn idents() {
-        check("hello world", &expect![[r#"
+        check("hello world", &expect![[r"
             (0, «h»)
             (5, « »)
             (6, «w»)
@@ -410,8 +449,8 @@ mod stage1_tests {
             (29, «�»)
             (30, «�»)
             (31, «�»)
-        "#]]);
-        check("  hello  world  ", &expect![[r#"
+        "]]);
+        check("  hello  world  ", &expect![[r"
             (0, « »)
             (2, «h»)
             (7, « »)
@@ -433,8 +472,9 @@ mod stage1_tests {
             (29, «�»)
             (30, «�»)
             (31, «�»)
-        "#]]);
-        check("  hello+world  ", &expect![[r#"
+        "]]);
+
+        check("  hello+world  ", &expect![[r"
             (0, « »)
             (2, «h»)
             (7, «+»)
@@ -457,9 +497,9 @@ mod stage1_tests {
             (29, «�»)
             (30, «�»)
             (31, «�»)
-        "#]]);
+        "]]);
 
-        check("  hello + world  ", &expect![[r#"
+        check("  hello + world  ", &expect![[r"
             (0, « »)
             (2, «h»)
             (7, « »)
@@ -498,7 +538,7 @@ mod stage1_tests {
             (45, «�»)
             (46, «�»)
             (47, «�»)
-        "#]]);
+        "]]);
     }
 
     #[test]
@@ -587,7 +627,7 @@ mod stage1_tests {
             (29, «�»)
             (30, «�»)
             (31, «�»)
-"]]);
+        "]]);
         check("!#/*\n*/~>", &expect![[r"
             (0, «!»)
             (1, «#»)
@@ -895,7 +935,7 @@ mod stage2_tests {
             (RCurly, 24..25, «}»)
             (Tilde, 25..26, «~»)
         "]]);
-        check("!#///*\n", &expect![[r#"
+        check("!#///*\n", &expect![[r"
             (Bang, 0..1, «!»)
             (Hash, 1..2, «#»)
             (Slash, 2..3, «/»)
@@ -904,8 +944,8 @@ mod stage2_tests {
             (Star, 5..6, «*»)
             (Whitespace, 6..7, «
             »)
-        "#]]);
-        check("!#/*\n*/~>", &expect![[r#"
+        "]]);
+        check("!#/*\n*/~>", &expect![[r"
             (Bang, 0..1, «!»)
             (Hash, 1..2, «#»)
             (Slash, 2..3, «/»)
@@ -916,7 +956,7 @@ mod stage2_tests {
             (Slash, 6..7, «/»)
             (Tilde, 7..8, «~»)
             (Gt, 8..9, «>»)
-        "#]]);
+        "]]);
     }
 
     #[test]
@@ -960,5 +1000,109 @@ mod stage2_tests {
                 (RCurly, 67..68, «}»)
             "#]],
         );
+
+        check(
+            r#"{ b"\\\"Nam[": [ 116,b"\\\\" , 234 , b"true" , false ] , b"t" : b"\\\"" }"#,
+            &expect![[r#"
+                (LCurly, 0..1, «{»)
+                (Whitespace, 1..2, « »)
+                (ByteStr, 2..13, «b"\\\"Nam["»)
+                (Colon, 13..14, «:»)
+                (Whitespace, 14..15, « »)
+                (LSquare, 15..16, «[»)
+                (Whitespace, 16..17, « »)
+                (Int, 17..20, «116»)
+                (Comma, 20..21, «,»)
+                (ByteStr, 21..28, «b"\\\\"»)
+                (Whitespace, 28..29, « »)
+                (Comma, 29..30, «,»)
+                (Whitespace, 30..31, « »)
+                (Int, 31..34, «234»)
+                (Whitespace, 34..35, « »)
+                (Comma, 35..36, «,»)
+                (Whitespace, 36..37, « »)
+                (ByteStr, 37..44, «b"true"»)
+                (Whitespace, 44..45, « »)
+                (Comma, 45..46, «,»)
+                (Whitespace, 46..47, « »)
+                (Ident, 47..52, «false»)
+                (Whitespace, 52..53, « »)
+                (RSquare, 53..54, «]»)
+                (Whitespace, 54..55, « »)
+                (Comma, 55..56, «,»)
+                (Whitespace, 56..57, « »)
+                (ByteStr, 57..61, «b"t"»)
+                (Whitespace, 61..62, « »)
+                (Colon, 62..63, «:»)
+                (Whitespace, 63..64, « »)
+                (ByteStr, 64..71, «b"\\\""»)
+                (Whitespace, 71..72, « »)
+                (RCurly, 72..73, «}»)
+            "#]],
+        );
+
+        check(
+            r#"{ c"\\\"Nam[": [ 116,c"\\\\" , 234 , c"true" , false ] , c"t" : c"\\\"" }"#,
+            &expect![[r#"
+                (LCurly, 0..1, «{»)
+                (Whitespace, 1..2, « »)
+                (CStr, 2..13, «c"\\\"Nam["»)
+                (Colon, 13..14, «:»)
+                (Whitespace, 14..15, « »)
+                (LSquare, 15..16, «[»)
+                (Whitespace, 16..17, « »)
+                (Int, 17..20, «116»)
+                (Comma, 20..21, «,»)
+                (CStr, 21..28, «c"\\\\"»)
+                (Whitespace, 28..29, « »)
+                (Comma, 29..30, «,»)
+                (Whitespace, 30..31, « »)
+                (Int, 31..34, «234»)
+                (Whitespace, 34..35, « »)
+                (Comma, 35..36, «,»)
+                (Whitespace, 36..37, « »)
+                (CStr, 37..44, «c"true"»)
+                (Whitespace, 44..45, « »)
+                (Comma, 45..46, «,»)
+                (Whitespace, 46..47, « »)
+                (Ident, 47..52, «false»)
+                (Whitespace, 52..53, « »)
+                (RSquare, 53..54, «]»)
+                (Whitespace, 54..55, « »)
+                (Comma, 55..56, «,»)
+                (Whitespace, 56..57, « »)
+                (CStr, 57..61, «c"t"»)
+                (Whitespace, 61..62, « »)
+                (Colon, 62..63, «:»)
+                (Whitespace, 63..64, « »)
+                (CStr, 64..71, «c"\\\""»)
+                (Whitespace, 71..72, « »)
+                (RCurly, 72..73, «}»)
+            "#]],
+        );
+
+        check(r#""0123456789012""after""#, &expect![[r#"
+            (Str, 0..15, «"0123456789012"»)
+            (Str, 15..22, «"after"»)
+        "#]]);
+        check(r#""01234567890123""after""#, &expect![[r#"
+            (Str, 0..16, «"01234567890123"»)
+            (Str, 16..23, «"after"»)
+        "#]]);
+        check(r#""012345678901234""after""#, &expect![[r#"
+            (Str, 0..17, «"012345678901234"»)
+            (Str, 17..24, «"after"»)
+        "#]]);
+    }
+
+    #[test]
+    fn unterminated_strings() {
+        check(r#""unterminated"#, &expect![[r#"
+            (Str, 0..14, «"unterminated�»)
+    "#]]);
+
+        check(r#""unterminated over several chunks"#, &expect![[r#"
+            (Str, 0..34, «"unterminated over several chunks�»)
+        "#]]);
     }
 }
