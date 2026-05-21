@@ -24,10 +24,10 @@ pub unsafe fn push_unchecked<T>(vec: &mut Vec<T>, value: T) {
 ///
 /// Inherits the safety requirements of `ptr::write_unaligned` and `ptr::add`.
 #[inline]
-pub unsafe fn write_and_advance<T>(out: *mut u8, val: T) -> *mut u8 {
+pub unsafe fn write_and_advance<T>(out: *mut T, val: T) -> *mut T {
     unsafe {
         out.cast::<T>().write_unaligned(val);
-        out.add(size_of::<T>())
+        out.add(1)
     }
 }
 
@@ -43,7 +43,7 @@ pub unsafe fn write_token(
         let len = end.offset_from_unsigned(start) as u32;
         debug_assert_ne!(len, 0);
         let out = write_and_advance(out, kind as u8);
-        write_and_advance(out, len)
+        write_and_advance(out.cast(), len).cast()
     }
 }
 
