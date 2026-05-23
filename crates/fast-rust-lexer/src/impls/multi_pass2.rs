@@ -243,6 +243,10 @@ pub fn stage1<'a, const VEC_LEN: usize>(src: &[u8], out_slice: &'a mut [u32]) ->
             let strings = prefix_xor(real_quotes) ^ (if prev_string { ALL_ONES } else { 0 });
             prev_string = strings >> (VEC_LEN - 1) != 0;
             deprintln!("strings       = {}", fmt_bitmask::<VEC_LEN>(strings));
+            let open_quotes = real_quotes & strings;
+            let close_quotes = real_quotes & !strings;
+            deprintln!("open_quotes   = {}", fmt_bitmask::<VEC_LEN>(open_quotes));
+            deprintln!("close_quotes  = {}", fmt_bitmask::<VEC_LEN>(close_quotes));
 
             let whitespace;
             (whitespace, prev_whitespace) = whitespace_mask::<VEC_LEN>(ws_chars, prev_whitespace);
@@ -254,13 +258,15 @@ pub fn stage1<'a, const VEC_LEN: usize>(src: &[u8], out_slice: &'a mut [u32]) ->
 
             // Any character that is not an alphanumeric char or a whitespace char, and not
             // in a string, is a punctuation char.
-            let puncts = !ws_chars & !ident_chars & !strings & !eofs;
+            let puncts = !ws_chars & !ident_chars & !strings & !close_quotes & !eofs;
             deprintln!("punct         = {}", fmt_bitmask::<VEC_LEN>(puncts));
 
-            let mask = ((idents | puncts | whitespace) & !strings) | real_quotes;
+            let mask = ((idents | puncts | whitespace) & !strings) | open_quotes;
+            let mask = mask & !close_quotes;
 
             let mut mask = (mask | eofs) & ALL_ONES;
             deprintln!("mask          = {}", fmt_bitmask::<VEC_LEN>(mask));
+            deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
 
             let next_out_ptr = out_ptr.add(mask.count_ones() as usize);
             while mask != 0 {
@@ -306,53 +312,31 @@ pub fn stage2<const VEC_LEN: usize>(src: &[u8], indexes: &[u32]) -> Vec<(TokenKi
                 start = end;
             }
             b'"' => {
-                let inclusive_end = indexes.next().unwrap();
                 let exclusive_end = indexes.next().unwrap();
-                debug_assert_eq!(
-                    inclusive_end + 1,
-                    exclusive_end,
-                    "inclusive_end = {inclusive_end}, exclusive_end = {exclusive_end}"
-                );
                 tokens.push((TokenKind::Str, start, exclusive_end));
                 start = exclusive_end;
             }
             b'b' if src[start as usize + 1] == b'"' => {
-                let str_start = indexes.next().unwrap();
+                let open_quote = indexes.next().unwrap();
                 debug_assert_eq!(
-                    str_start,
+                    open_quote,
                     start + 1,
-                    "start = {start}, str_start = {str_start}"
+                    "start = {start}, open_quote = {open_quote}"
                 );
-
-                let str_inclusive_end = indexes.next().unwrap();
-                let str_exclusive_end = indexes.next().unwrap();
-                debug_assert_eq!(
-                    str_inclusive_end + 1,
-                    str_exclusive_end,
-                    "str_inclusive_end = {str_inclusive_end}, str_exclusive_end = \
-                     {str_exclusive_end}"
-                );
-                tokens.push((TokenKind::ByteStr, start, str_exclusive_end));
-                start = str_exclusive_end;
+                let exclusive_end = indexes.next().unwrap();
+                tokens.push((TokenKind::ByteStr, start, exclusive_end));
+                start = exclusive_end;
             }
             b'c' if src[start as usize + 1] == b'"' => {
-                let str_start = indexes.next().unwrap();
+                let open_quote = indexes.next().unwrap();
                 debug_assert_eq!(
-                    str_start,
+                    open_quote,
                     start + 1,
-                    "start = {start}, str_start = {str_start}"
+                    "start = {start}, open_quote = {open_quote}"
                 );
-
-                let str_inclusive_end = indexes.next().unwrap();
-                let str_exclusive_end = indexes.next().unwrap();
-                debug_assert_eq!(
-                    str_inclusive_end + 1,
-                    str_exclusive_end,
-                    "str_inclusive_end = {str_inclusive_end}, str_exclusive_end = \
-                     {str_exclusive_end}"
-                );
-                tokens.push((TokenKind::CStr, start, str_exclusive_end));
-                start = str_exclusive_end;
+                let exclusive_end = indexes.next().unwrap();
+                tokens.push((TokenKind::CStr, start, exclusive_end));
+                start = exclusive_end;
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                 let end = indexes.next().unwrap();
@@ -669,7 +653,6 @@ mod stage1_tests {
     fn strings() {
         check(r#""""#, &expect![[r#"
             (0, «"»)
-            (1, «"»)
             (2, «�»)
             (3, «�»)
             (4, «�»)
@@ -796,13 +779,10 @@ mod stage1_tests {
             //    01234567890123456789012345678901234567890123456
             &expect!([r#"
                 (0, «"»)
-                (1, «"»)
                 (2, « »)
                 (3, «"»)
-                (10, «"»)
                 (11, « »)
                 (12, «"»)
-                (29, «"»)
                 (30, « »)
                 (31, «"»)
                 (44, «�»)
@@ -1098,11 +1078,11 @@ mod stage2_tests {
     #[test]
     fn unterminated_strings() {
         check(r#""unterminated"#, &expect![[r#"
-            (Str, 0..14, «"unterminated�»)
-    "#]]);
+            (Str, 0..13, «"unterminated»)
+        "#]]);
 
         check(r#""unterminated over several chunks"#, &expect![[r#"
-            (Str, 0..34, «"unterminated over several chunks�»)
+            (Str, 0..33, «"unterminated over several chunks»)
         "#]]);
     }
 }
