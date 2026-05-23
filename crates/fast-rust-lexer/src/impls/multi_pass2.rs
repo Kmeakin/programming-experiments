@@ -35,6 +35,31 @@ fn prefix_xor(mut bits: u64) -> u64 {
     bits
 }
 
+/// Return a mask with 1s at each character in a `// ... \n` comment body.
+///
+/// `line_comment_open` marks the second slash of `//`, so comment body starts
+/// at `line_comment_open << 1`. This uses a set/reset scan rather than xor
+/// toggling, so repeated starts or repeated newlines are handled correctly.
+fn line_comment_body_mask<const VEC_LEN: usize>(
+    line_comment_open: u64,
+    newlines: u64,
+    mut prev_in_line_comment: bool,
+) -> (u64, bool) {
+    let starts = line_comment_open << 1;
+    let mut in_comment = u64::from(prev_in_line_comment);
+    let mut body = 0;
+
+    for i in 0..VEC_LEN {
+        let set = (starts >> i) & 1;
+        let reset = (newlines >> i) & 1;
+        in_comment = (in_comment | set) & (reset ^ 1);
+        body |= in_comment << i;
+    }
+
+    prev_in_line_comment = in_comment != 0;
+    (body, prev_in_line_comment)
+}
+
 fn fmt_bitmask<const VEC_LEN: usize>(bits: u64) -> impl std::fmt::Display {
     std::fmt::from_fn(move |f| match VEC_LEN {
         16 => write!(f, "{:0VEC_LEN$b}", (bits as u16).reverse_bits()),
@@ -213,6 +238,8 @@ pub fn stage1<'a, const VEC_LEN: usize>(src: &[u8], out_slice: &'a mut [u32]) ->
         let mut prev_ident = false;
         let mut prev_string = false;
         let mut prev_escaped = false;
+        let mut prev_slash = false;
+        let mut prev_in_line_comment = false;
         loop {
             let vec = load::<VEC_LEN>(src_ptr);
             let eofs = movemask(eq(vec, EOF_BYTE));
@@ -220,6 +247,8 @@ pub fn stage1<'a, const VEC_LEN: usize>(src: &[u8], out_slice: &'a mut [u32]) ->
                 movemask(eq(vec, b' ') | eq(vec, b'\t') | eq(vec, b'\n') | eq(vec, b'\r'));
             let quotes = movemask(eq(vec, b'"'));
             let backslashes = movemask(eq(vec, b'\\'));
+            let slashes = movemask(eq(vec, b'/'));
+            let newlines = movemask(eq(vec, b'\n'));
             let ident_chars = movemask(
                 eq(vec, b'_')
                     | in_range(vec, b'a', b'z')
@@ -232,6 +261,8 @@ pub fn stage1<'a, const VEC_LEN: usize>(src: &[u8], out_slice: &'a mut [u32]) ->
             deprintln!("quotes        = {}", fmt_bitmask::<VEC_LEN>(quotes));
             deprintln!("backslashes   = {}", fmt_bitmask::<VEC_LEN>(backslashes));
             deprintln!("ident_chars   = {}", fmt_bitmask::<VEC_LEN>(ident_chars));
+            deprintln!("slashes       = {}", fmt_bitmask::<VEC_LEN>(slashes));
+            deprintln!("newlines      = {}", fmt_bitmask::<VEC_LEN>(newlines));
 
             let escaped_chars;
             (escaped_chars, prev_escaped) =
@@ -248,6 +279,22 @@ pub fn stage1<'a, const VEC_LEN: usize>(src: &[u8], out_slice: &'a mut [u32]) ->
             deprintln!("open_quotes   = {}", fmt_bitmask::<VEC_LEN>(open_quotes));
             deprintln!("close_quotes  = {}", fmt_bitmask::<VEC_LEN>(close_quotes));
 
+            let slash2 = slashes & (slashes << 1 | u64::from(prev_slash));
+            prev_slash = slashes >> (VEC_LEN - 1) != 0;
+            deprintln!("slash2        = {}", fmt_bitmask::<VEC_LEN>(slash2));
+
+            let line_comment_open = slash2 & !strings;
+            let line_comment_ranges;
+            (line_comment_ranges, prev_in_line_comment) = line_comment_body_mask::<VEC_LEN>(
+                line_comment_open,
+                newlines,
+                prev_in_line_comment,
+            );
+            deprintln!(
+                "line_comment  = {}",
+                fmt_bitmask::<VEC_LEN>(line_comment_ranges)
+            );
+
             let whitespace;
             (whitespace, prev_whitespace) = whitespace_mask::<VEC_LEN>(ws_chars, prev_whitespace);
             deprintln!("whitespace    = {}", fmt_bitmask::<VEC_LEN>(whitespace));
@@ -262,7 +309,7 @@ pub fn stage1<'a, const VEC_LEN: usize>(src: &[u8], out_slice: &'a mut [u32]) ->
             deprintln!("punct         = {}", fmt_bitmask::<VEC_LEN>(puncts));
 
             let mask = ((idents | puncts | whitespace) & !strings) | open_quotes;
-            let mask = mask & !close_quotes;
+            let mask = mask & !close_quotes & !line_comment_ranges;
 
             let mut mask = (mask | eofs) & ALL_ONES;
             deprintln!("mask          = {}", fmt_bitmask::<VEC_LEN>(mask));
@@ -296,6 +343,16 @@ pub fn stage2<const VEC_LEN: usize>(src: &[u8], indexes: &[u32]) -> Vec<(TokenKi
     };
     loop {
         match src[start as usize] {
+            b'/' if src[start as usize + 1] == b'/' => {
+                let slash2 = indexes.next().unwrap();
+                debug_assert_eq!(slash2, start + 1);
+
+                let newline = indexes.next().unwrap();
+                debug_assert!(src[newline as usize] == b'\n' || src[newline as usize] == EOF_BYTE);
+                tokens.push((TokenKind::LineComment, start, newline));
+                start = newline;
+            }
+
             b @ (b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+' | b'-'
             | b'*' | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@' | b'.'
             | b'!' | b'>' | b'<' | b'^' | b'/') => {
@@ -582,8 +639,6 @@ mod stage1_tests {
             (1, «#»)
             (2, «/»)
             (3, «/»)
-            (4, «/»)
-            (5, «*»)
             (6, «
             »)
             (7, «�»)
@@ -918,10 +973,7 @@ mod stage2_tests {
         check("!#///*\n", &expect![[r"
             (Bang, 0..1, «!»)
             (Hash, 1..2, «#»)
-            (Slash, 2..3, «/»)
-            (Slash, 3..4, «/»)
-            (Slash, 4..5, «/»)
-            (Star, 5..6, «*»)
+            (LineComment, 2..6, «///*»)
             (Whitespace, 6..7, «
             »)
         "]]);
@@ -1084,5 +1136,49 @@ mod stage2_tests {
         check(r#""unterminated over several chunks"#, &expect![[r#"
             (Str, 0..33, «"unterminated over several chunks»)
         "#]]);
+    }
+
+    #[test]
+    fn line_comments() {
+        check("//", &expect![[r"
+        (LineComment, 0..2, «//»)
+        "]]);
+
+        check("//\n", &expect![[r"
+            (LineComment, 0..2, «//»)
+            (Whitespace, 2..3, «
+            »)
+        "]]);
+
+        check("//foo\n", &expect![[r"
+            (LineComment, 0..5, «//foo»)
+            (Whitespace, 5..6, «
+            »)
+        "]]);
+
+        check("//foo //bar\n", &expect![[r"
+            (LineComment, 0..11, «//foo //bar»)
+            (Whitespace, 11..12, «
+            »)
+        "]]);
+
+        check("//foo\n//bar\n", &expect![[r"
+            (LineComment, 0..5, «//foo»)
+            (Whitespace, 5..6, «
+            »)
+            (LineComment, 6..11, «//bar»)
+            (Whitespace, 11..12, «
+            »)
+        "]]);
+
+        check("//foo\nbar\n//foobar", &expect![[r"
+            (LineComment, 0..5, «//foo»)
+            (Whitespace, 5..6, «
+            »)
+            (Ident, 6..9, «bar»)
+            (Whitespace, 9..10, «
+            »)
+            (LineComment, 10..18, «//foobar»)
+        "]]);
     }
 }
