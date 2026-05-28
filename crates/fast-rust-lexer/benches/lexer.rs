@@ -3,7 +3,7 @@ use std::ptr;
 
 use criterion::{Criterion, Throughput};
 use fast_rust_lexer::utils::push_unchecked;
-use fast_rust_lexer::{multi_pass, raw_ptr, simd, simd2, simd3};
+use fast_rust_lexer::{multi_pass, multi_pass2, raw_ptr, simd, simd2, simd3};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -489,6 +489,23 @@ fn simd3<const VEC_LEN: usize>(c: &mut Criterion) {
     group.finish();
 }
 
+fn multi_pass2<const VEC_LEN: usize>(c: &mut Criterion) {
+    let input = get_input();
+    let (input, mut output) = multi_pass2::prepare_input::<VEC_LEN>(&input);
+
+    let mut group = c.benchmark_group("multi_pass2");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+
+    group.bench_function(format!("multi_pass2::stage1::<{VEC_LEN}>"), |b| {
+        b.iter(|| {
+            let output = multi_pass2::stage1::<VEC_LEN>(&input, &mut output);
+            black_box(output);
+        });
+    });
+
+    group.finish();
+}
+
 fn main() {
     let mut criterion: Criterion<_> = Criterion::default().configure_from_args();
     check_unicode(&mut criterion);
@@ -513,5 +530,10 @@ fn main() {
     simd3::<16>(&mut criterion);
     simd3::<32>(&mut criterion);
     simd3::<64>(&mut criterion);
+
+    multi_pass2::<16>(&mut criterion);
+    multi_pass2::<32>(&mut criterion);
+    multi_pass2::<64>(&mut criterion);
+
     Criterion::default().configure_from_args().final_summary();
 }

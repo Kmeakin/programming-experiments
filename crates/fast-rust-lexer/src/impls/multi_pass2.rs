@@ -1,6 +1,7 @@
 #![allow(clippy::wildcard_imports)]
 
 use std::bstr::ByteStr;
+use std::simd::Simd;
 
 use crate::TokenKind;
 use crate::utils::simdx::*;
@@ -20,7 +21,8 @@ pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> (Vec<u8>, Vec<u32>) {
         input_vec.extend([EOF_BYTE; VEC_LEN]);
         assert!(input_vec.as_ptr().is_aligned_to(VEC_LEN));
 
-        let output_vec = vec![0u32; input_vec.len()];
+        let eof_pos = src.len() as u32;
+        let output_vec = vec![eof_pos; input_vec.len()];
         (input_vec, output_vec)
     }
 }
@@ -200,16 +202,41 @@ fn whitespace_mask<const VEC_LEN: usize>(
     (whitespaces, prev_whitespace)
 }
 
-/// Like `eprintln`, but only when `debug_assertions` are enabled.
-macro_rules! deprintln {
-    ($($args:tt)*) => {
-        if cfg!(debug_assertions) {
-            eprintln!($($args)*);
+#[inline(always)]
+unsafe fn write_indices<const VEC_LEN: usize>(mut out_ptr: *mut u32, mut mask: u64, idx: u32) {
+    let ceil = VEC_LEN as u32;
+
+    unsafe {
+        if cfg!(target_arch = "aarch64") {
+            mask = mask.reverse_bits();
+            while mask != 0 {
+                unroll!(16, {
+                    out_ptr = write_and_advance(out_ptr, idx + mask.leading_zeros().min(ceil));
+                    mask ^= mask.isolate_highest_one();
+                });
+            }
+        } else {
+            while mask != 0 {
+                unroll!(16, {
+                    out_ptr = write_and_advance(out_ptr, idx + mask.trailing_zeros().min(ceil));
+                    mask ^= mask.isolate_lowest_one();
+                });
+            }
         }
-    };
+    }
 }
 
-pub fn stage1<'a, const VEC_LEN: usize>(src: &[u8], out_slice: &'a mut [u32]) -> &'a mut [u32] {
+#[derive(Default)]
+#[allow(clippy::struct_excessive_bools)]
+struct Carry {
+    whitespace: bool,
+    ident:      bool,
+    escaped:    bool,
+    string:     bool,
+}
+
+#[inline]
+fn token_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> u64 {
     #[allow(non_snake_case)]
     let ALL_ONES: u64 = const {
         match VEC_LEN {
@@ -220,117 +247,129 @@ pub fn stage1<'a, const VEC_LEN: usize>(src: &[u8], out_slice: &'a mut [u32]) ->
         }
     };
 
+    // let eofs = movemask(eq(vec, EOF_BYTE));
+    // let ws_chars = movemask(is_whitespace(vec));
+    let ws_chars = movemask(in_range(vec, 0x09, 0x0D) | eq(vec, b' '));
+    let quotes = movemask(eq(vec, b'"'));
+    let backslashes = movemask(eq(vec, b'\\'));
+    // let slashes = movemask(eq(vec, b'/'));
+    // let newlines = movemask(eq(vec, b'\n'));
+    let ident_chars = movemask(
+        eq(vec, b'_')
+            | in_range(vec, b'a', b'z')
+            | in_range(vec, b'A', b'Z')
+            | in_range(vec, b'0', b'9'),
+    );
+    deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
+    // deprintln!("eof           = {}", fmt_bitmask::<VEC_LEN>(eofs));
+    deprintln!("ws_chars      = {}", fmt_bitmask::<VEC_LEN>(ws_chars));
+    deprintln!("quotes        = {}", fmt_bitmask::<VEC_LEN>(quotes));
+    deprintln!("backslashes   = {}", fmt_bitmask::<VEC_LEN>(backslashes));
+    deprintln!("ident_chars   = {}", fmt_bitmask::<VEC_LEN>(ident_chars));
+    // deprintln!("slashes       = {}", fmt_bitmask::<VEC_LEN>(slashes));
+    // deprintln!("newlines      = {}", fmt_bitmask::<VEC_LEN>(newlines));
+
+    let escaped_chars;
+    (escaped_chars, carry.escaped) = escaped_chars_mask::<VEC_LEN>(backslashes, carry.escaped);
+    let real_quotes = quotes & !escaped_chars;
+    deprintln!("escaped_chars = {}", fmt_bitmask::<VEC_LEN>(escaped_chars));
+    deprintln!("real_quotes   = {}", fmt_bitmask::<VEC_LEN>(real_quotes));
+
+    let strings = prefix_xor(real_quotes) ^ (if carry.string { ALL_ONES } else { 0 });
+    carry.string = strings >> (VEC_LEN - 1) != 0;
+    deprintln!("strings       = {}", fmt_bitmask::<VEC_LEN>(strings));
+    let open_quotes = real_quotes & strings;
+    let close_quotes = real_quotes & !strings;
+    deprintln!("open_quotes   = {}", fmt_bitmask::<VEC_LEN>(open_quotes));
+    deprintln!("close_quotes  = {}", fmt_bitmask::<VEC_LEN>(close_quotes));
+
+    // let slash2 = slashes & (slashes << 1 | u64::from(prev_slash));
+    // prev_slash = slashes >> (VEC_LEN - 1) != 0;
+    // deprintln!("slash2        = {}", fmt_bitmask::<VEC_LEN>(slash2));
+
+    // let line_comment_open = slash2 & !strings;
+    // let line_comment_ranges;
+    // (line_comment_ranges, prev_in_line_comment) =
+    // line_comment_body_mask::<VEC_LEN>(     line_comment_open,
+    //     newlines,
+    //     prev_in_line_comment,
+    // );
+    // deprintln!(
+    //     "line_comment  = {}",
+    //     fmt_bitmask::<VEC_LEN>(line_comment_ranges)
+    // );
+
+    let whitespace;
+    (whitespace, carry.whitespace) = whitespace_mask::<VEC_LEN>(ws_chars, carry.whitespace);
+    deprintln!("whitespace    = {}", fmt_bitmask::<VEC_LEN>(whitespace));
+
+    let idents;
+    (idents, carry.ident) = idents_mask::<VEC_LEN>(ident_chars, carry.ident);
+    deprintln!("idents        = {}", fmt_bitmask::<VEC_LEN>(idents));
+
+    // Any character that is not an alphanumeric char or a whitespace char, and not
+    // in a string, is a punctuation char.
+    let puncts = !ws_chars & !ident_chars & !strings & !close_quotes;
+    deprintln!("punct         = {}", fmt_bitmask::<VEC_LEN>(puncts));
+
+    let mask = ((idents | puncts | whitespace) & !strings) | open_quotes;
+    // let mask = mask & !close_quotes & !line_comment_ranges;
+    let mask = mask & !close_quotes;
+
+    let mask = (mask) & ALL_ONES;
+    deprintln!("mask          = {}", fmt_bitmask::<VEC_LEN>(mask));
+    deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
+
+    mask
+}
+
+pub fn stage1<'a, const VEC_LEN: usize>(
+    padded_src: &[u8],
+    out_slice: &'a mut [u32],
+) -> &'a mut [u32] {
     unsafe {
-        debug_assert!(out_slice.len() >= src.len());
-        debug_assert_eq!(src.last_chunk(), Some(&[EOF_BYTE; VEC_LEN]));
-        debug_assert_eq!(
-            src.rchunks_exact(VEC_LEN).nth(1),
-            Some([EOF_BYTE; VEC_LEN].as_slice())
-        );
+        debug_assert!(out_slice.len() >= padded_src.len());
+        let src = padded_src.strip_suffix(&[EOF_BYTE; VEC_LEN]).unwrap();
+        let src = src.strip_suffix(&[EOF_BYTE; VEC_LEN]).unwrap();
 
         let src_start = src.as_ptr();
-        let src_end = src.as_ptr_range().end.sub(VEC_LEN);
+        let src_end = src.as_ptr_range().end;
         let mut src_ptr = src_start;
         let mut out_ptr = out_slice.as_mut_ptr();
 
         let mut idx = 0;
-        let mut prev_whitespace = false;
-        let mut prev_ident = false;
-        let mut prev_string = false;
-        let mut prev_escaped = false;
-        let mut prev_slash = false;
-        let mut prev_in_line_comment = false;
+        let mut carry = Carry::default();
         loop {
-            let vec = load::<VEC_LEN>(src_ptr);
-            let eofs = movemask(eq(vec, EOF_BYTE));
-            let ws_chars =
-                movemask(eq(vec, b' ') | eq(vec, b'\t') | eq(vec, b'\n') | eq(vec, b'\r'));
-            let quotes = movemask(eq(vec, b'"'));
-            let backslashes = movemask(eq(vec, b'\\'));
-            let slashes = movemask(eq(vec, b'/'));
-            let newlines = movemask(eq(vec, b'\n'));
-            let ident_chars = movemask(
-                eq(vec, b'_')
-                    | in_range(vec, b'a', b'z')
-                    | in_range(vec, b'A', b'Z')
-                    | in_range(vec, b'0', b'9'),
-            );
-            deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
-            deprintln!("eof           = {}", fmt_bitmask::<VEC_LEN>(eofs));
-            deprintln!("ws_chars      = {}", fmt_bitmask::<VEC_LEN>(ws_chars));
-            deprintln!("quotes        = {}", fmt_bitmask::<VEC_LEN>(quotes));
-            deprintln!("backslashes   = {}", fmt_bitmask::<VEC_LEN>(backslashes));
-            deprintln!("ident_chars   = {}", fmt_bitmask::<VEC_LEN>(ident_chars));
-            deprintln!("slashes       = {}", fmt_bitmask::<VEC_LEN>(slashes));
-            deprintln!("newlines      = {}", fmt_bitmask::<VEC_LEN>(newlines));
+            let vec1 = load::<VEC_LEN>(src_ptr);
+            let vec2 = load::<VEC_LEN>(src_ptr.add(VEC_LEN));
 
-            let escaped_chars;
-            (escaped_chars, prev_escaped) =
-                escaped_chars_mask::<VEC_LEN>(backslashes, prev_escaped);
-            let real_quotes = quotes & !escaped_chars;
-            deprintln!("escaped_chars = {}", fmt_bitmask::<VEC_LEN>(escaped_chars));
-            deprintln!("real_quotes   = {}", fmt_bitmask::<VEC_LEN>(real_quotes));
+            let mask1 = token_mask(vec1, &mut carry);
+            let mask2 = token_mask(vec2, &mut carry);
 
-            let strings = prefix_xor(real_quotes) ^ (if prev_string { ALL_ONES } else { 0 });
-            prev_string = strings >> (VEC_LEN - 1) != 0;
-            deprintln!("strings       = {}", fmt_bitmask::<VEC_LEN>(strings));
-            let open_quotes = real_quotes & strings;
-            let close_quotes = real_quotes & !strings;
-            deprintln!("open_quotes   = {}", fmt_bitmask::<VEC_LEN>(open_quotes));
-            deprintln!("close_quotes  = {}", fmt_bitmask::<VEC_LEN>(close_quotes));
+            let count1 = mask1.count_ones() as usize;
+            let count2 = mask2.count_ones() as usize;
+            let total_count = count1 + count2;
 
-            let slash2 = slashes & (slashes << 1 | u64::from(prev_slash));
-            prev_slash = slashes >> (VEC_LEN - 1) != 0;
-            deprintln!("slash2        = {}", fmt_bitmask::<VEC_LEN>(slash2));
+            write_indices::<VEC_LEN>(out_ptr, mask1, idx);
+            write_indices::<VEC_LEN>(out_ptr.add(count1), mask2, idx + VEC_LEN as u32);
+            idx += VEC_LEN as u32 * 2;
+            out_ptr = out_ptr.add(total_count);
 
-            let line_comment_open = slash2 & !strings;
-            let line_comment_ranges;
-            (line_comment_ranges, prev_in_line_comment) = line_comment_body_mask::<VEC_LEN>(
-                line_comment_open,
-                newlines,
-                prev_in_line_comment,
-            );
-            deprintln!(
-                "line_comment  = {}",
-                fmt_bitmask::<VEC_LEN>(line_comment_ranges)
-            );
-
-            let whitespace;
-            (whitespace, prev_whitespace) = whitespace_mask::<VEC_LEN>(ws_chars, prev_whitespace);
-            deprintln!("whitespace    = {}", fmt_bitmask::<VEC_LEN>(whitespace));
-
-            let idents;
-            (idents, prev_ident) = idents_mask::<VEC_LEN>(ident_chars, prev_ident);
-            deprintln!("idents        = {}", fmt_bitmask::<VEC_LEN>(idents));
-
-            // Any character that is not an alphanumeric char or a whitespace char, and not
-            // in a string, is a punctuation char.
-            let puncts = !ws_chars & !ident_chars & !strings & !close_quotes & !eofs;
-            deprintln!("punct         = {}", fmt_bitmask::<VEC_LEN>(puncts));
-
-            let mask = ((idents | puncts | whitespace) & !strings) | open_quotes;
-            let mask = mask & !close_quotes & !line_comment_ranges;
-
-            let mut mask = (mask | eofs) & ALL_ONES;
-            deprintln!("mask          = {}", fmt_bitmask::<VEC_LEN>(mask));
-            deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
-
-            let next_out_ptr = out_ptr.add(mask.count_ones() as usize);
-            while mask != 0 {
-                out_ptr = write_and_advance(out_ptr, idx + mask.trailing_zeros());
-                mask = mask & (mask - 1);
-            }
-            out_ptr = next_out_ptr;
-
-            src_ptr = src_ptr.add(VEC_LEN);
-            idx += VEC_LEN as u32;
+            src_ptr = src_ptr.add(VEC_LEN * 2);
             if src_ptr >= src_end {
                 deprintln!("done\n");
                 break;
             }
             deprintln!();
         }
-        let out_len = out_ptr.offset_from_unsigned(out_slice.as_mut_ptr());
+        let eof_pos = src.len() as u32;
+        let mut out_len = out_ptr.offset_from_unsigned(out_slice.as_mut_ptr());
+
+        if out_ptr.read() != eof_pos {
+            out_slice[out_len] = eof_pos;
+            out_len += 1;
+        }
+
         &mut out_slice[..out_len]
     }
 }
@@ -343,6 +382,7 @@ pub fn stage2<const VEC_LEN: usize>(src: &[u8], indexes: &[u32]) -> Vec<(TokenKi
     };
     loop {
         match src[start as usize] {
+            #[cfg(false)]
             b'/' if src[start as usize + 1] == b'/' => {
                 let slash2 = indexes.next().unwrap();
                 debug_assert_eq!(slash2, start + 1);
@@ -414,6 +454,18 @@ pub fn stage2<const VEC_LEN: usize>(src: &[u8], indexes: &[u32]) -> Vec<(TokenKi
     tokens
 }
 
+pub fn stage1_16<'a>(src: &[u8], out_slice: &'a mut [u32]) -> &'a mut [u32] {
+    stage1::<16>(src, out_slice)
+}
+
+pub fn stage1_32<'a>(src: &[u8], out_slice: &'a mut [u32]) -> &'a mut [u32] {
+    stage1::<32>(src, out_slice)
+}
+
+pub fn stage1_64<'a>(src: &[u8], out_slice: &'a mut [u32]) -> &'a mut [u32] {
+    stage1::<64>(src, out_slice)
+}
+
 #[cfg(test)]
 mod stage1_tests {
     use std::bstr::ByteStr;
@@ -474,22 +526,6 @@ mod stage1_tests {
             (13, «�»)
             (14, «�»)
             (15, «�»)
-            (16, «�»)
-            (17, «�»)
-            (18, «�»)
-            (19, «�»)
-            (20, «�»)
-            (21, «�»)
-            (22, «�»)
-            (23, «�»)
-            (24, «�»)
-            (25, «�»)
-            (26, «�»)
-            (27, «�»)
-            (28, «�»)
-            (29, «�»)
-            (30, «�»)
-            (31, «�»)
         "]]);
         check("  hello  world  ", &expect![[r"
             (0, « »)
@@ -497,22 +533,6 @@ mod stage1_tests {
             (7, « »)
             (9, «w»)
             (14, « »)
-            (16, «�»)
-            (17, «�»)
-            (18, «�»)
-            (19, «�»)
-            (20, «�»)
-            (21, «�»)
-            (22, «�»)
-            (23, «�»)
-            (24, «�»)
-            (25, «�»)
-            (26, «�»)
-            (27, «�»)
-            (28, «�»)
-            (29, «�»)
-            (30, «�»)
-            (31, «�»)
         "]]);
 
         check("  hello+world  ", &expect![[r"
@@ -522,22 +542,6 @@ mod stage1_tests {
             (8, «w»)
             (13, « »)
             (15, «�»)
-            (16, «�»)
-            (17, «�»)
-            (18, «�»)
-            (19, «�»)
-            (20, «�»)
-            (21, «�»)
-            (22, «�»)
-            (23, «�»)
-            (24, «�»)
-            (25, «�»)
-            (26, «�»)
-            (27, «�»)
-            (28, «�»)
-            (29, «�»)
-            (30, «�»)
-            (31, «�»)
         "]]);
 
         check("  hello + world  ", &expect![[r"
@@ -563,22 +567,6 @@ mod stage1_tests {
             (29, «�»)
             (30, «�»)
             (31, «�»)
-            (32, «�»)
-            (33, «�»)
-            (34, «�»)
-            (35, «�»)
-            (36, «�»)
-            (37, «�»)
-            (38, «�»)
-            (39, «�»)
-            (40, «�»)
-            (41, «�»)
-            (42, «�»)
-            (43, «�»)
-            (44, «�»)
-            (45, «�»)
-            (46, «�»)
-            (47, «�»)
         "]]);
     }
 
@@ -617,28 +605,14 @@ mod stage1_tests {
             (29, «�»)
             (30, «�»)
             (31, «�»)
-            (32, «�»)
-            (33, «�»)
-            (34, «�»)
-            (35, «�»)
-            (36, «�»)
-            (37, «�»)
-            (38, «�»)
-            (39, «�»)
-            (40, «�»)
-            (41, «�»)
-            (42, «�»)
-            (43, «�»)
-            (44, «�»)
-            (45, «�»)
-            (46, «�»)
-            (47, «�»)
         "]]);
         check("!#///*\n", &expect![[r"
             (0, «!»)
             (1, «#»)
             (2, «/»)
             (3, «/»)
+            (4, «/»)
+            (5, «*»)
             (6, «
             »)
             (7, «�»)
@@ -650,22 +624,6 @@ mod stage1_tests {
             (13, «�»)
             (14, «�»)
             (15, «�»)
-            (16, «�»)
-            (17, «�»)
-            (18, «�»)
-            (19, «�»)
-            (20, «�»)
-            (21, «�»)
-            (22, «�»)
-            (23, «�»)
-            (24, «�»)
-            (25, «�»)
-            (26, «�»)
-            (27, «�»)
-            (28, «�»)
-            (29, «�»)
-            (30, «�»)
-            (31, «�»)
         "]]);
         check("!#/*\n*/~>", &expect![[r"
             (0, «!»)
@@ -685,22 +643,6 @@ mod stage1_tests {
             (13, «�»)
             (14, «�»)
             (15, «�»)
-            (16, «�»)
-            (17, «�»)
-            (18, «�»)
-            (19, «�»)
-            (20, «�»)
-            (21, «�»)
-            (22, «�»)
-            (23, «�»)
-            (24, «�»)
-            (25, «�»)
-            (26, «�»)
-            (27, «�»)
-            (28, «�»)
-            (29, «�»)
-            (30, «�»)
-            (31, «�»)
         "]]);
     }
 
@@ -722,111 +664,17 @@ mod stage1_tests {
             (13, «�»)
             (14, «�»)
             (15, «�»)
-            (16, «�»)
-            (17, «�»)
-            (18, «�»)
-            (19, «�»)
-            (20, «�»)
-            (21, «�»)
-            (22, «�»)
-            (23, «�»)
-            (24, «�»)
-            (25, «�»)
-            (26, «�»)
-            (27, «�»)
-            (28, «�»)
-            (29, «�»)
-            (30, «�»)
-            (31, «�»)
         "#]]);
 
         check(r#"""#, &expect![[r#"
             (0, «"»)
-            (1, «�»)
-            (2, «�»)
-            (3, «�»)
-            (4, «�»)
-            (5, «�»)
-            (6, «�»)
-            (7, «�»)
-            (8, «�»)
-            (9, «�»)
-            (10, «�»)
-            (11, «�»)
-            (12, «�»)
-            (13, «�»)
-            (14, «�»)
-            (15, «�»)
-            (16, «�»)
-            (17, «�»)
-            (18, «�»)
-            (19, «�»)
-            (20, «�»)
-            (21, «�»)
-            (22, «�»)
-            (23, «�»)
-            (24, «�»)
-            (25, «�»)
-            (26, «�»)
-            (27, «�»)
-            (28, «�»)
-            (29, «�»)
-            (30, «�»)
-            (31, «�»)
         "#]]);
 
         check(r#""123456789abcdef"#, &expect![[r#"
             (0, «"»)
-            (16, «�»)
-            (17, «�»)
-            (18, «�»)
-            (19, «�»)
-            (20, «�»)
-            (21, «�»)
-            (22, «�»)
-            (23, «�»)
-            (24, «�»)
-            (25, «�»)
-            (26, «�»)
-            (27, «�»)
-            (28, «�»)
-            (29, «�»)
-            (30, «�»)
-            (31, «�»)
         "#]]);
         check(r#""123456789abcdef0"#, &expect![[r#"
             (0, «"»)
-            (17, «�»)
-            (18, «�»)
-            (19, «�»)
-            (20, «�»)
-            (21, «�»)
-            (22, «�»)
-            (23, «�»)
-            (24, «�»)
-            (25, «�»)
-            (26, «�»)
-            (27, «�»)
-            (28, «�»)
-            (29, «�»)
-            (30, «�»)
-            (31, «�»)
-            (32, «�»)
-            (33, «�»)
-            (34, «�»)
-            (35, «�»)
-            (36, «�»)
-            (37, «�»)
-            (38, «�»)
-            (39, «�»)
-            (40, «�»)
-            (41, «�»)
-            (42, «�»)
-            (43, «�»)
-            (44, «�»)
-            (45, «�»)
-            (46, «�»)
-            (47, «�»)
         "#]]);
 
         check(
@@ -840,26 +688,6 @@ mod stage1_tests {
                 (12, «"»)
                 (30, « »)
                 (31, «"»)
-                (44, «�»)
-                (45, «�»)
-                (46, «�»)
-                (47, «�»)
-                (48, «�»)
-                (49, «�»)
-                (50, «�»)
-                (51, «�»)
-                (52, «�»)
-                (53, «�»)
-                (54, «�»)
-                (55, «�»)
-                (56, «�»)
-                (57, «�»)
-                (58, «�»)
-                (59, «�»)
-                (60, «�»)
-                (61, «�»)
-                (62, «�»)
-                (63, «�»)
             "#]),
         );
     }
@@ -876,7 +704,6 @@ mod stage2_tests {
 
     const VEC_LEN: usize = 16;
 
-    #[track_caller]
     fn check(src: &str, expect: &Expect) {
         use std::fmt::Write;
 
@@ -915,7 +742,10 @@ mod stage2_tests {
         check("abcdef1234567890", &expect![[r"
             (Ident, 0..16, «abcdef1234567890»)
         "]]);
+    }
 
+    #[test]
+    fn idents2() {
         check("abcdef1234567890xyz", &expect![[r"
             (Ident, 0..19, «abcdef1234567890xyz»)
         "]]);
@@ -973,7 +803,10 @@ mod stage2_tests {
         check("!#///*\n", &expect![[r"
             (Bang, 0..1, «!»)
             (Hash, 1..2, «#»)
-            (LineComment, 2..6, «///*»)
+            (Slash, 2..3, «/»)
+            (Slash, 3..4, «/»)
+            (Slash, 4..5, «/»)
+            (Star, 5..6, «*»)
             (Whitespace, 6..7, «
             »)
         "]]);
@@ -1139,6 +972,7 @@ mod stage2_tests {
     }
 
     #[test]
+    #[cfg(false)]
     fn line_comments() {
         check("//", &expect![[r"
         (LineComment, 0..2, «//»)

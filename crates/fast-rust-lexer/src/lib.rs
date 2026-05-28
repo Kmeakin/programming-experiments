@@ -2,15 +2,20 @@
     bstr,
     explicit_tail_calls,
     iter_next_chunk,
+    likely_unlikely,
     link_llvm_intrinsics,
+    pointer_is_aligned_to,
     portable_simd,
     rust_preserve_none_cc,
     simd_ffi,
-    slice_from_ptr_range,
-    pointer_is_aligned_to,
-    likely_unlikely
+    slice_from_ptr_range
 )]
-#![allow(unused_features, incomplete_features, internal_features)]
+#![allow(
+    clippy::inline_always,
+    incomplete_features,
+    internal_features,
+    unused_features
+)]
 
 pub mod impls;
 pub mod utils;

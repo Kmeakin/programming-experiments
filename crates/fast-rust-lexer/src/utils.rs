@@ -26,7 +26,7 @@ pub unsafe fn push_unchecked<T>(vec: &mut Vec<T>, value: T) {
 #[inline]
 pub unsafe fn write_and_advance<T>(out: *mut T, val: T) -> *mut T {
     unsafe {
-        out.cast::<T>().write_unaligned(val);
+        out.write_unaligned(val);
         out.add(1)
     }
 }
@@ -68,3 +68,59 @@ pub fn align_down<const ALIGN: usize>(ptr: *const u8) -> *const u8 {
     const { assert!(ALIGN.is_power_of_two()) }
     ptr.map_addr(|addr| addr & !(ALIGN - 1))
 }
+
+#[macro_export]
+macro_rules! unroll {
+    (0, $block:block) => {};
+    (1, $block:block) => {
+        $block
+    };
+    (2, $block:block) => {
+        $block;
+        unroll!(1, $block)
+    };
+    (3, $block:block) => {
+        $block;
+        unroll!(2, $block)
+    };
+    (4, $block:block) => {
+        $block;
+        unroll!(3, $block)
+    };
+    (5, $block:block) => {
+        $block;
+        unroll!(4, $block)
+    };
+    (6, $block:block) => {
+        $block;
+        unroll!(5, $block)
+    };
+    (7, $block:block) => {
+        $block;
+        unroll!(6, $block)
+    };
+    (8, $block:block) => {
+        $block;
+        unroll!(7, $block)
+    };
+    (16, $block:block) => {
+        unroll!(8, $block);
+        unroll!(8, $block)
+    };
+    (32, $block:block) => {
+        unroll!(16, $block);
+        unroll!(16, $block)
+    };
+}
+pub use crate::unroll;
+
+/// Like `eprintln`, but only when `debug_assertions` are enabled.
+#[macro_export]
+macro_rules! deprintln {
+    ($($args:tt)*) => {
+        if cfg!(debug_assertions) {
+            eprintln!($($args)*);
+        }
+    };
+}
+pub use crate::deprintln;

@@ -1,9 +1,13 @@
 use std::simd::prelude::*;
 
+#[must_use]
+#[inline]
 pub fn eq<const N: usize>(vec: Simd<u8, N>, byte: u8) -> Mask<i8, N> {
     vec.simd_eq(Simd::splat(byte))
 }
 
+#[must_use]
+#[inline]
 pub fn in_range<const N: usize>(vec: Simd<u8, N>, min: u8, max: u8) -> Mask<i8, N> {
     Simd::splat(min).simd_le(vec) & vec.simd_le(Simd::splat(max))
 }
@@ -14,10 +18,9 @@ pub fn in_range<const N: usize>(vec: Simd<u8, N>, min: u8, max: u8) -> Mask<i8, 
 /// Usual ptr read requirements.
 pub unsafe fn load<const VEC_LEN: usize>(ptr: *const u8) -> Simd<u8, VEC_LEN> {
     unsafe {
-        debug_assert!(ptr.is_aligned_to(VEC_LEN));
         cfg_select! {
             target_arch = "aarch64" => aarch64::load::<false, VEC_LEN>(ptr),
-            target_arch = "x86_64" => ptr.cast::<Simd<u8, VEC_LEN>>().read()
+            target_arch = "x86_64" => ptr.cast::<Simd<u8, VEC_LEN>>().read_unaligned()
         }
     }
 }
@@ -28,6 +31,15 @@ pub fn movemask<const VEC_LEN: usize>(mask: Mask<i8, VEC_LEN>) -> u64 {
     cfg_select! {
         target_arch = "aarch64" => aarch64::movemask::<false, VEC_LEN>(mask),
         target_arch = "x86_64" => mask.to_bitmask()
+    }
+}
+
+#[must_use]
+#[inline]
+pub fn is_whitespace<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> Mask<i8, VEC_LEN> {
+    cfg_select! {
+        target_arch = "aarch64" => aarch64::is_whitespace::<VEC_LEN>(vec),
+        target_arch = "x86_64" => todo!(),
     }
 }
 
@@ -46,7 +58,7 @@ pub fn first_set<const N: usize>(mask: Mask<i8, N>) -> Option<usize> {
 #[allow(clippy::wildcard_imports)]
 mod aarch64 {
     use std::arch::aarch64::*;
-    use std::mem::transmute;
+    use std::mem::{transmute, transmute_copy};
     use std::simd::prelude::*;
 
     #[rustfmt::skip]
@@ -67,6 +79,46 @@ mod aarch64 {
 
         #[link_name = "llvm.aarch64.neon.addp.v16i8"]
         pub fn vpaddq_u8(a: uint8x16_t, b: uint8x16_t) -> uint8x16_t;
+    }
+
+    const WS_TABLE: uint8x16_t = unsafe {
+        let mut table = [0u8; 16];
+        table[0x09] = 0xff;
+        table[0x0A] = 0xff;
+        table[0x0B] = 0xff;
+        table[0x0C] = 0xff;
+        table[0x0D] = 0xff;
+        transmute(table)
+    };
+
+    unsafe fn whitespace_16(vec: uint8x16_t) -> uint8x16_t {
+        unsafe { vqtbx1q_u8(vceqq_u8(vec, vdupq_n_u8(b' ')), WS_TABLE, vec) }
+    }
+
+    unsafe fn whitespace_32(vec: uint8x16x2_t) -> uint8x16x2_t {
+        unsafe { uint8x16x2_t(whitespace_16(vec.0), whitespace_16(vec.1)) }
+    }
+
+    unsafe fn whitespace_64(vec: uint8x16x4_t) -> uint8x16x4_t {
+        unsafe {
+            uint8x16x4_t(
+                whitespace_16(vec.0),
+                whitespace_16(vec.1),
+                whitespace_16(vec.2),
+                whitespace_16(vec.3),
+            )
+        }
+    }
+
+    pub fn is_whitespace<const N: usize>(vec: Simd<u8, N>) -> Mask<i8, N> {
+        unsafe {
+            match N {
+                16 => transmute_copy(&whitespace_16(transmute_copy(&vec))),
+                32 => transmute_copy(&whitespace_32(transmute_copy(&vec))),
+                64 => transmute_copy(&whitespace_64(transmute_copy(&vec))),
+                _ => unreachable!(),
+            }
+        }
     }
 
     #[must_use]
