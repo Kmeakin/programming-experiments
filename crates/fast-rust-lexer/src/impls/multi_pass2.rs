@@ -1,6 +1,7 @@
 #![allow(clippy::wildcard_imports)]
 
 use std::bstr::ByteStr;
+use std::debug_assert_matches;
 use std::simd::Simd;
 
 use crate::TokenKind;
@@ -37,31 +38,6 @@ fn prefix_xor(mut bits: u64) -> u64 {
     bits
 }
 
-/// Return a mask with 1s at each character in a `// ... \n` comment body.
-///
-/// `line_comment_open` marks the second slash of `//`, so comment body starts
-/// at `line_comment_open << 1`. This uses a set/reset scan rather than xor
-/// toggling, so repeated starts or repeated newlines are handled correctly.
-fn line_comment_body_mask<const VEC_LEN: usize>(
-    line_comment_open: u64,
-    newlines: u64,
-    mut prev_in_line_comment: bool,
-) -> (u64, bool) {
-    let starts = line_comment_open << 1;
-    let mut in_comment = u64::from(prev_in_line_comment);
-    let mut body = 0;
-
-    for i in 0..VEC_LEN {
-        let set = (starts >> i) & 1;
-        let reset = (newlines >> i) & 1;
-        in_comment = (in_comment | set) & (reset ^ 1);
-        body |= in_comment << i;
-    }
-
-    prev_in_line_comment = in_comment != 0;
-    (body, prev_in_line_comment)
-}
-
 fn fmt_bitmask<const VEC_LEN: usize>(bits: u64) -> impl std::fmt::Display {
     std::fmt::from_fn(move |f| match VEC_LEN {
         16 => write!(f, "{:0VEC_LEN$b}", (bits as u16).reverse_bits()),
@@ -84,7 +60,6 @@ fn escaped_chars_mask<const VEC_LEN: usize>(
     // See https://github.com/simdjson/simdjson/pull/2042
 
     const ODD_BITS: u64 = 0xA_AA_AA_AA_AA_AA_AA; // 1010 repeated
-    let next_is_escaped = prev_escaped;
     // |                                | Mask (shows characters instead of 1's) | Depth | Instructions        |
     // |--------------------------------|----------------------------------------|-------|---------------------|
     // | string                         | `\\n_\\\n___\\\n___\\\\___\\\\__\\\`   |       |                     |
@@ -96,7 +71,7 @@ fn escaped_chars_mask<const VEC_LEN: usize>(
     // | first_is_escaped               | `\                                 `   | 7 (*) | 9 (escape >> 63) ()
     //
     // (*) this is not needed until the next iteration
-    let potential_escape = backslashes & !u64::from(next_is_escaped);
+    let potential_escape = backslashes & !u64::from(prev_escaped);
 
     // If we were to just shift and mask out any odd bits, we'd actually get a
     // *half* right answer: any even-aligned backslashes runs would be correct!
@@ -147,7 +122,7 @@ fn escaped_chars_mask<const VEC_LEN: usize>(
     // - Sets actually-escaped codes to 1 (the n in \n and \\n: \n = 11, \\n = 100)
     // - Resets all other bytes to 0
     let escape_and_terminal_code = even_series_codes_and_odd_bits ^ ODD_BITS;
-    let escaped = escape_and_terminal_code ^ (backslashes | u64::from(next_is_escaped));
+    let escaped = escape_and_terminal_code ^ (backslashes | u64::from(prev_escaped));
     prev_escaped = (escape_and_terminal_code & backslashes) >> (VEC_LEN - 1) != 0;
     (escaped, prev_escaped)
 }
@@ -226,6 +201,16 @@ unsafe fn write_indices<const VEC_LEN: usize>(mut out_ptr: *mut u32, mut mask: u
     }
 }
 
+#[inline]
+const fn ctz<const VEC_LEN: usize>(bits: u64) -> usize {
+    match VEC_LEN {
+        16 => (bits as u16).trailing_zeros() as usize,
+        32 => (bits as u32).trailing_zeros() as usize,
+        64 => bits.trailing_zeros() as usize,
+        _ => unreachable!(),
+    }
+}
+
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 struct Carry {
@@ -233,6 +218,7 @@ struct Carry {
     ident:      bool,
     escaped:    bool,
     string:     bool,
+    slash:      bool,
 }
 
 #[inline]
@@ -247,27 +233,43 @@ fn token_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -
         }
     };
 
-    // let eofs = movemask(eq(vec, EOF_BYTE));
     // let ws_chars = movemask(is_whitespace(vec));
     let ws_chars = movemask(in_range(vec, 0x09, 0x0D) | eq(vec, b' '));
-    let quotes = movemask(eq(vec, b'"'));
-    let backslashes = movemask(eq(vec, b'\\'));
-    // let slashes = movemask(eq(vec, b'/'));
-    // let newlines = movemask(eq(vec, b'\n'));
     let ident_chars = movemask(
         eq(vec, b'_')
             | in_range(vec, b'a', b'z')
             | in_range(vec, b'A', b'Z')
             | in_range(vec, b'0', b'9'),
     );
+
     deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
-    // deprintln!("eof           = {}", fmt_bitmask::<VEC_LEN>(eofs));
     deprintln!("ws_chars      = {}", fmt_bitmask::<VEC_LEN>(ws_chars));
-    deprintln!("quotes        = {}", fmt_bitmask::<VEC_LEN>(quotes));
-    deprintln!("backslashes   = {}", fmt_bitmask::<VEC_LEN>(backslashes));
     deprintln!("ident_chars   = {}", fmt_bitmask::<VEC_LEN>(ident_chars));
-    // deprintln!("slashes       = {}", fmt_bitmask::<VEC_LEN>(slashes));
-    // deprintln!("newlines      = {}", fmt_bitmask::<VEC_LEN>(newlines));
+
+    let whitespace;
+    (whitespace, carry.whitespace) = whitespace_mask::<VEC_LEN>(ws_chars, carry.whitespace);
+    deprintln!("whitespace    = {}", fmt_bitmask::<VEC_LEN>(whitespace));
+
+    let idents;
+    (idents, carry.ident) = idents_mask::<VEC_LEN>(ident_chars, carry.ident);
+    deprintln!("idents        = {}", fmt_bitmask::<VEC_LEN>(idents));
+
+    // Any character that is not an alphanumeric char or a whitespace char is a
+    // punctuation char.
+    let puncts = !ws_chars & !ident_chars;
+    deprintln!("punct         = {}", fmt_bitmask::<VEC_LEN>(puncts));
+
+    let mask = idents | puncts | whitespace;
+    let mask = (mask) & ALL_ONES;
+    deprintln!("mask          = {}", fmt_bitmask::<VEC_LEN>(mask));
+    deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
+
+    mask
+}
+
+#[cfg(false)]
+fn foo() {
+    let backslashes = movemask(eq(vec, b'\\'));
 
     let escaped_chars;
     (escaped_chars, carry.escaped) = escaped_chars_mask::<VEC_LEN>(backslashes, carry.escaped);
@@ -281,46 +283,53 @@ fn token_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -
     let open_quotes = real_quotes & strings;
     let close_quotes = real_quotes & !strings;
     deprintln!("open_quotes   = {}", fmt_bitmask::<VEC_LEN>(open_quotes));
+
     deprintln!("close_quotes  = {}", fmt_bitmask::<VEC_LEN>(close_quotes));
+}
 
-    // let slash2 = slashes & (slashes << 1 | u64::from(prev_slash));
-    // prev_slash = slashes >> (VEC_LEN - 1) != 0;
-    // deprintln!("slash2        = {}", fmt_bitmask::<VEC_LEN>(slash2));
+// Return a mask of characters requiring special handling.
+#[inline]
+fn special_mask<const VEC_LEN: usize>(v: Simd<u8, VEC_LEN>, carry: &mut Carry) -> u64 {
+    let quote = movemask(eq(v, b'"'));
+    let apostrophe = movemask(eq(v, b'\''));
+    let slash = movemask(eq(v, b'/'));
+    let star = movemask(eq(v, b'*'));
 
-    // let line_comment_open = slash2 & !strings;
-    // let line_comment_ranges;
-    // (line_comment_ranges, prev_in_line_comment) =
-    // line_comment_body_mask::<VEC_LEN>(     line_comment_open,
-    //     newlines,
-    //     prev_in_line_comment,
-    // );
-    // deprintln!(
-    //     "line_comment  = {}",
-    //     fmt_bitmask::<VEC_LEN>(line_comment_ranges)
-    // );
+    let carry_slash = u64::from(carry.slash);
+    let next_slash = slash >> 1;
+    let next_star = star >> 1;
 
-    let whitespace;
-    (whitespace, carry.whitespace) = whitespace_mask::<VEC_LEN>(ws_chars, carry.whitespace);
-    deprintln!("whitespace    = {}", fmt_bitmask::<VEC_LEN>(whitespace));
+    let line_comment = (carry_slash | (slash << 1)) & slash; // `//`
+    let block_comment = (carry_slash | (slash << 1)) & star; // `/*`
 
-    let idents;
-    (idents, carry.ident) = idents_mask::<VEC_LEN>(ident_chars, carry.ident);
-    deprintln!("idents        = {}", fmt_bitmask::<VEC_LEN>(idents));
+    let line_comment = line_comment;
+    let block_comment = block_comment;
 
-    // Any character that is not an alphanumeric char or a whitespace char, and not
-    // in a string, is a punctuation char.
-    let puncts = !ws_chars & !ident_chars & !strings & !close_quotes;
-    deprintln!("punct         = {}", fmt_bitmask::<VEC_LEN>(puncts));
+    let specials = quote | apostrophe | line_comment | block_comment;
 
-    let mask = ((idents | puncts | whitespace) & !strings) | open_quotes;
-    // let mask = mask & !close_quotes & !line_comment_ranges;
-    let mask = mask & !close_quotes;
+    deprintln!();
+    deprintln!("v        = {}", ByteStr::new(&v));
+    deprintln!("\"        = {}", fmt_bitmask::<VEC_LEN>(quote));
+    deprintln!("'        = {}", fmt_bitmask::<VEC_LEN>(apostrophe));
+    deprintln!("*        = {}", fmt_bitmask::<VEC_LEN>(star));
+    deprintln!("* << 1   = {}", fmt_bitmask::<VEC_LEN>(next_star));
+    deprintln!("/ carry  = {}", fmt_bitmask::<VEC_LEN>(carry_slash));
+    deprintln!("/        = {}", fmt_bitmask::<VEC_LEN>(slash));
+    deprintln!("/ << 1   = {}", fmt_bitmask::<VEC_LEN>(next_slash));
+    deprintln!("//       = {}", fmt_bitmask::<VEC_LEN>(line_comment));
+    deprintln!("/*       = {}", fmt_bitmask::<VEC_LEN>(block_comment));
+    deprintln!("specials = {}", fmt_bitmask::<VEC_LEN>(specials));
+    deprintln!();
 
-    let mask = (mask) & ALL_ONES;
-    deprintln!("mask          = {}", fmt_bitmask::<VEC_LEN>(mask));
-    deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
+    carry.slash = slash >> (VEC_LEN - 1) != 0;
+    specials
+}
 
-    mask
+enum State {
+    Normal,
+    LineComment,
+    BlockComment,
+    DoubleQuote,
 }
 
 pub fn stage1<'a, const VEC_LEN: usize>(
@@ -339,116 +348,429 @@ pub fn stage1<'a, const VEC_LEN: usize>(
 
         let mut idx = 0;
         let mut carry = Carry::default();
-        loop {
-            let vec1 = load::<VEC_LEN>(src_ptr);
-            let vec2 = load::<VEC_LEN>(src_ptr.add(VEC_LEN));
+        let state = State::Normal;
+        'outer: loop {
+            match state {
+                State::Normal => {
+                    let vec1 = load::<VEC_LEN>(src_ptr);
+                    let mut mask = token_mask(vec1, &mut carry);
+                    let specials = special_mask(vec1, &mut carry);
+                    if specials == 0 {
+                        write_indices::<VEC_LEN>(out_ptr, mask, idx);
+                        out_ptr = out_ptr.add(mask.count_ones() as usize);
+                    } else {
+                        while !(mask == 0 && specials == 0) {
+                            let mask_tz = mask.trailing_zeros().min(VEC_LEN as u32);
+                            let spec_tz = specials.trailing_zeros().min(VEC_LEN as u32);
 
-            let mask1 = token_mask(vec1, &mut carry);
-            let mask2 = token_mask(vec2, &mut carry);
+                            if mask_tz != spec_tz {
+                                out_ptr = write_and_advance(out_ptr, idx + mask_tz);
+                                mask ^= mask.isolate_lowest_one();
+                                continue;
+                            }
 
-            let count1 = mask1.count_ones() as usize;
-            let count2 = mask2.count_ones() as usize;
-            let total_count = count1 + count2;
+                            let token_start_pos = idx + mask_tz;
+                            let token_start_ptr = src_ptr.add(spec_tz as usize);
+                            let mut token_end_ptr = token_start_ptr.add(1);
 
-            write_indices::<VEC_LEN>(out_ptr, mask1, idx);
-            write_indices::<VEC_LEN>(out_ptr.add(count1), mask2, idx + VEC_LEN as u32);
-            idx += VEC_LEN as u32 * 2;
-            out_ptr = out_ptr.add(total_count);
+                            let prev_byte = token_start_ptr.sub(1).read();
+                            let byte = token_start_ptr.read();
+                            match byte {
+                                b'"' if prev_byte == b'r' => {
+                                    out_ptr = write_and_advance(out_ptr, token_start_pos);
+                                    loop {
+                                        match token_end_ptr.read() {
+                                            b'"' => {
+                                                token_end_ptr = token_end_ptr.add(1);
+                                                break;
+                                            }
+                                            EOF_BYTE => break,
+                                            _ => token_end_ptr = token_end_ptr.add(1),
+                                        }
+                                    }
+                                }
+                                b'"' if prev_byte == b'#' => {
+                                    out_ptr = write_and_advance(out_ptr, token_start_pos);
+                                    let num_hashes = {
+                                        let mut n = 0u32;
+                                        let mut ptr = token_start_ptr.sub(1);
+                                        while ptr.read() == b'#' {
+                                            n += 1;
+                                            ptr = ptr.sub(1);
+                                        }
+                                        n
+                                    };
 
-            src_ptr = src_ptr.add(VEC_LEN * 2);
-            if src_ptr >= src_end {
-                deprintln!("done\n");
-                break;
+                                    'foo: loop {
+                                        match token_end_ptr.read() {
+                                            b'"' => {
+                                                token_end_ptr = token_end_ptr.add(1);
+                                                let mut hashes = num_hashes;
+                                                while token_end_ptr.read() == b'#' {
+                                                    hashes -= 1;
+                                                    token_end_ptr = token_end_ptr.add(1);
+                                                    if hashes == 0 {
+                                                        break 'foo;
+                                                    }
+                                                }
+                                            }
+                                            EOF_BYTE => break,
+                                            _ => token_end_ptr = token_end_ptr.add(1),
+                                        }
+                                    }
+                                }
+                                b'"' => {
+                                    out_ptr = write_and_advance(out_ptr, token_start_pos);
+                                    loop {
+                                        match token_end_ptr.read() {
+                                            b'"' => {
+                                                token_end_ptr = token_end_ptr.add(1);
+                                                break;
+                                            }
+                                            EOF_BYTE => break,
+                                            b'\\' => token_end_ptr = token_end_ptr.add(2),
+                                            _ => token_end_ptr = token_end_ptr.add(1),
+                                        }
+                                    }
+                                }
+                                b'\'' => {
+                                    out_ptr = write_and_advance(out_ptr, token_start_pos);
+                                    if let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' =
+                                        token_end_ptr.read()
+                                    {
+                                        while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' =
+                                            token_end_ptr.read()
+                                        {
+                                            token_end_ptr = token_end_ptr.add(1);
+                                        }
+                                        if token_end_ptr.read() == b'\'' {
+                                            token_end_ptr = token_end_ptr.add(1);
+                                        }
+                                    } else {
+                                        loop {
+                                            match token_end_ptr.read() {
+                                                b'\'' => {
+                                                    token_end_ptr = token_end_ptr.add(1);
+                                                    break;
+                                                }
+                                                EOF_BYTE => break,
+                                                b'\\' => token_end_ptr = token_end_ptr.add(2),
+                                                _ => token_end_ptr = token_end_ptr.add(1),
+                                            }
+                                        }
+                                    }
+                                }
+                                b'/' if prev_byte == b'/' => {
+                                    // out_ptr = write_and_advance(out_ptr, token_start_pos - 1);
+                                    loop {
+                                        match token_end_ptr.read() {
+                                            b'\n' | EOF_BYTE => break,
+                                            _ => token_end_ptr = token_end_ptr.add(1),
+                                        }
+                                    }
+                                }
+                                b'*' if prev_byte == b'/' => {
+                                    // out_ptr = write_and_advance(out_ptr, token_start_pos - 1);
+                                    let mut depth = 1;
+                                    loop {
+                                        match &token_end_ptr.cast::<[u8; 2]>().read() {
+                                            b"/*" => {
+                                                token_end_ptr = token_end_ptr.add(2);
+                                                depth += 1;
+                                            }
+                                            b"*/" => {
+                                                token_end_ptr = token_end_ptr.add(2);
+                                                depth -= 1;
+                                                if depth == 0 {
+                                                    break;
+                                                }
+                                            }
+                                            [EOF_BYTE, _] => break,
+                                            _ => token_end_ptr = token_end_ptr.add(1),
+                                        }
+                                    }
+                                }
+                                _ => unreachable!(
+                                    "unknown token start: {}",
+                                    ByteStr::new(&token_start_ptr.cast::<[u8; 32]>().read())
+                                ),
+                            }
+
+                            let token_end_pos =
+                                token_end_ptr.offset_from_unsigned(src_start) as u32;
+                            src_ptr = token_end_ptr;
+                            idx = token_end_pos;
+                            carry = Carry::default();
+                            continue 'outer;
+                        }
+                    }
+                    idx += VEC_LEN as u32;
+                    src_ptr = src_ptr.add(VEC_LEN);
+                    if src_ptr >= src_end {
+                        break;
+                    }
+                }
+                State::LineComment => todo!(),
+                State::BlockComment => todo!(),
+                State::DoubleQuote => todo!(),
             }
-            deprintln!();
-        }
-        let eof_pos = src.len() as u32;
-        let mut out_len = out_ptr.offset_from_unsigned(out_slice.as_mut_ptr());
-
-        if out_ptr.read() != eof_pos {
-            out_slice[out_len] = eof_pos;
-            out_len += 1;
         }
 
+        let len = src.len() as u32;
+        out_ptr = write_and_advance(out_ptr, len);
+
+        let out_len = out_ptr.offset_from_unsigned(out_slice.as_mut_ptr());
         &mut out_slice[..out_len]
     }
 }
 
 pub fn stage2<const VEC_LEN: usize>(src: &[u8], indexes: &[u32]) -> Vec<(TokenKind, u32, u32)> {
     let mut tokens = Vec::new();
-    let mut indexes = indexes.iter().copied();
-    let Some(mut start) = indexes.next() else {
+    let mut index_iter = indexes.iter().copied();
+    let Some(mut start) = index_iter.next() else {
         return tokens;
     };
     loop {
         match src[start as usize] {
-            #[cfg(false)]
             b'/' if src[start as usize + 1] == b'/' => {
-                let slash2 = indexes.next().unwrap();
-                debug_assert_eq!(slash2, start + 1);
-
-                let newline = indexes.next().unwrap();
-                debug_assert!(src[newline as usize] == b'\n' || src[newline as usize] == EOF_BYTE);
-                tokens.push((TokenKind::LineComment, start, newline));
-                start = newline;
+                let end = index_iter.next().unwrap();
+                debug_assert_matches!(
+                    src[end as usize],
+                    b'\n' | EOF_BYTE,
+                    "unknown token: {}\ncontext: {}\nstart = {start}, end = {end}\nindexes = {:?}",
+                    ByteStr::new(&src[start as usize..end as usize]),
+                    ByteStr::new(&src[start as usize - 1..end as usize + 16]),
+                    index_iter.clone().take(10).collect::<Vec<_>>(),
+                );
+                tokens.push((TokenKind::LineComment, start, end));
+                start = end;
+            }
+            b'/' if src[start as usize + 1] == b'*' => {
+                let close = index_iter.next().unwrap();
+                tokens.push((TokenKind::BlockComment, start, close));
+                start = close;
             }
 
             b @ (b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+' | b'-'
             | b'*' | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@' | b'.'
             | b'!' | b'>' | b'<' | b'^' | b'/') => {
-                let end = indexes.next().unwrap();
+                let end = index_iter.next().unwrap();
                 let kind = TokenKind::from_u8(b).unwrap();
-
-                debug_assert_eq!(end, start + 1, "start = {start}, end = {end}");
+                debug_assert_eq!(
+                    end,
+                    start + 1,
+                    "b = {:?}, start = {start}, end = {end}",
+                    b as char
+                );
                 tokens.push((kind, start, end));
                 start = end;
             }
             b' ' | b'\t' | b'\n' | b'\r' => {
-                let end = indexes.next().unwrap();
+                let end = index_iter.next().unwrap();
                 tokens.push((TokenKind::Whitespace, start, end));
                 start = end;
             }
             b'"' => {
-                let exclusive_end = indexes.next().unwrap();
+                let exclusive_end = index_iter.next().unwrap();
                 tokens.push((TokenKind::Str, start, exclusive_end));
                 start = exclusive_end;
             }
-            b'b' if src[start as usize + 1] == b'"' => {
-                let open_quote = indexes.next().unwrap();
-                debug_assert_eq!(
-                    open_quote,
-                    start + 1,
-                    "start = {start}, open_quote = {open_quote}"
-                );
-                let exclusive_end = indexes.next().unwrap();
-                tokens.push((TokenKind::ByteStr, start, exclusive_end));
-                start = exclusive_end;
-            }
-            b'c' if src[start as usize + 1] == b'"' => {
-                let open_quote = indexes.next().unwrap();
-                debug_assert_eq!(
-                    open_quote,
-                    start + 1,
-                    "start = {start}, open_quote = {open_quote}"
-                );
-                let exclusive_end = indexes.next().unwrap();
-                tokens.push((TokenKind::CStr, start, exclusive_end));
-                start = exclusive_end;
-            }
+            b'b' => match src[start as usize + 1..] {
+                [b'r', b'#', ..] => {
+                    let mut hash_pos = start + 2;
+                    while src[hash_pos as usize] == b'#' {
+                        let hash = index_iter.next().unwrap();
+                        debug_assert_eq!(hash, hash_pos);
+                        hash_pos += 1;
+                    }
+                    let _quote = index_iter.next().unwrap();
+                    let end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::RawByteStr, start, end));
+                    start = end;
+                }
+                [b'r', b'"', ..] => {
+                    let open_quote = index_iter.next().unwrap();
+                    debug_assert_eq!(
+                        open_quote,
+                        start + 2,
+                        "start = {start}, open_quote = {open_quote}"
+                    );
+                    let exclusive_end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::RawByteStr, start, exclusive_end));
+                    start = exclusive_end;
+                }
+                [b'"', ..] => {
+                    let open_quote = index_iter.next().unwrap();
+                    debug_assert_eq!(
+                        open_quote,
+                        start + 1,
+                        "start = {start}, open_quote = {open_quote}"
+                    );
+                    let exclusive_end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::ByteStr, start, exclusive_end));
+                    start = exclusive_end;
+                }
+                [b'\'', ..] => {
+                    let open_quote = index_iter.next().unwrap();
+                    debug_assert_eq!(
+                        open_quote,
+                        start + 1,
+                        "start = {start}, open_quote = {open_quote}"
+                    );
+                    let exclusive_end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::Byte, start, exclusive_end));
+                    start = exclusive_end;
+                }
+                _ => {
+                    let end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::Ident, start, end));
+                    start = end;
+                }
+            },
+            b'c' => match src[start as usize + 1..] {
+                [b'r', b'#', ..] => {
+                    let mut hash_pos = start + 2;
+                    while src[hash_pos as usize] == b'#' {
+                        let hash = index_iter.next().unwrap();
+                        debug_assert_eq!(hash, hash_pos);
+                        hash_pos += 1;
+                    }
+                    let _quote = index_iter.next().unwrap();
+                    let end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::RawCStr, start, end));
+                    start = end;
+                }
+                [b'r', b'"', ..] => {
+                    let open_quote = index_iter.next().unwrap();
+                    debug_assert_eq!(
+                        open_quote,
+                        start + 2,
+                        "start = {start}, open_quote = {open_quote}"
+                    );
+                    let exclusive_end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::RawCStr, start, exclusive_end));
+                    start = exclusive_end;
+                }
+                [b'"', ..] => {
+                    let open_quote = index_iter.next().unwrap();
+                    debug_assert_eq!(
+                        open_quote,
+                        start + 1,
+                        "start = {start}, open_quote = {open_quote}"
+                    );
+                    let exclusive_end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::CStr, start, exclusive_end));
+                    start = exclusive_end;
+                }
+
+                _ => {
+                    let end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::Ident, start, end));
+                    start = end;
+                }
+            },
+            b'r' => match src[start as usize + 1..] {
+                [b'#', b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', ..] => {
+                    let hash = index_iter.next().unwrap();
+                    debug_assert_eq!(hash, start + 1, "start = {start}, hash = {hash}");
+                    let ident_start = index_iter.next().unwrap();
+                    debug_assert_eq!(
+                        ident_start,
+                        start + 2,
+                        "start = {start}, ident_start = {ident_start}"
+                    );
+                    let end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::RawIdent, start, end));
+                    start = end;
+                }
+                [b'#', ..] => {
+                    let mut hash_pos = start + 1;
+                    while src[hash_pos as usize] == b'#' {
+                        let hash = index_iter.next().unwrap();
+                        debug_assert_eq!(hash, hash_pos);
+                        hash_pos += 1;
+                    }
+                    let _quote = index_iter.next().unwrap();
+                    let end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::RawStr, start, end));
+                    start = end;
+                }
+                [b'"', ..] => {
+                    let open_quote = index_iter.next().unwrap();
+                    debug_assert_eq!(
+                        open_quote,
+                        start + 1,
+                        "start = {start}, open_quote = {open_quote}"
+                    );
+                    let exclusive_end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::RawStr, start, exclusive_end));
+                    start = exclusive_end;
+                }
+                _ => {
+                    let end = index_iter.next().unwrap();
+                    tokens.push((TokenKind::Ident, start, end));
+                    start = end;
+                }
+            },
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
-                let end = indexes.next().unwrap();
+                let end = index_iter.next().unwrap();
                 tokens.push((TokenKind::Ident, start, end));
                 start = end;
             }
             b'0'..=b'9' => {
-                let end = indexes.next().unwrap();
-                tokens.push((TokenKind::Int, start, end));
+                let decimal_end = index_iter.next().unwrap();
+                match &src[decimal_end as usize - 1..] {
+                    [_, b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
+                        tokens.push((TokenKind::Int, start, decimal_end));
+                        start = decimal_end;
+                    }
+                    [_, b'.', b'0'..=b'9', ..] => {
+                        let _dot = index_iter.next().unwrap();
+                        let decimal_end = index_iter.next().unwrap();
+                        match src[decimal_end as usize - 1..] {
+                            [b'e' | b'E', b'-' | b'+', ..] => {
+                                let _sign = index_iter.next().unwrap();
+                                let decimal_end = index_iter.next().unwrap();
+                                tokens.push((TokenKind::Float, start, decimal_end));
+                                start = decimal_end;
+                            }
+                            _ => {
+                                tokens.push((TokenKind::Float, start, decimal_end));
+                                start = decimal_end;
+                            }
+                        }
+                    }
+                    [b'e' | b'E', b'-' | b'+', ..] => {
+                        let _sign = index_iter.next().unwrap();
+                        let decimal_end = index_iter.next().unwrap();
+                        tokens.push((TokenKind::Float, start, decimal_end));
+                        start = decimal_end;
+                    }
+                    [_, b'.', ..] => {
+                        let end = index_iter.next().unwrap();
+                        tokens.push((TokenKind::Float, start, end));
+                        start = end;
+                    }
+                    _ => {
+                        tokens.push((TokenKind::Int, start, decimal_end));
+                        start = decimal_end;
+                    }
+                }
+            }
+            b'\'' => {
+                let end = index_iter.next().unwrap();
+                match src[end as usize - 1] {
+                    b'\'' => tokens.push((TokenKind::Char, start, end)),
+                    _ => tokens.push((TokenKind::Lifetime, start, end)),
+                }
                 start = end;
             }
-
-            b'\'' => todo!(),
             EOF_BYTE => break,
-            b => todo!("unhandled byte: 0x{b:02x}"),
+            _ => {
+                let end = index_iter.next().unwrap();
+                tokens.push((TokenKind::Unknown, start, end));
+                start = end;
+            }
         }
     }
     tokens
@@ -803,22 +1125,15 @@ mod stage2_tests {
         check("!#///*\n", &expect![[r"
             (Bang, 0..1, «!»)
             (Hash, 1..2, «#»)
-            (Slash, 2..3, «/»)
-            (Slash, 3..4, «/»)
-            (Slash, 4..5, «/»)
-            (Star, 5..6, «*»)
+            (LineComment, 2..6, «///*»)
             (Whitespace, 6..7, «
             »)
         "]]);
         check("!#/*\n*/~>", &expect![[r"
             (Bang, 0..1, «!»)
             (Hash, 1..2, «#»)
-            (Slash, 2..3, «/»)
-            (Star, 3..4, «*»)
-            (Whitespace, 4..5, «
-            »)
-            (Star, 5..6, «*»)
-            (Slash, 6..7, «/»)
+            (BlockComment, 2..7, «/*
+            */»)
             (Tilde, 7..8, «~»)
             (Gt, 8..9, «>»)
         "]]);
@@ -972,47 +1287,20 @@ mod stage2_tests {
     }
 
     #[test]
-    #[cfg(false)]
     fn line_comments() {
-        check("//", &expect![[r"
-        (LineComment, 0..2, «//»)
+        check("0123456789abcdef//", &expect![[r"
+        (Int, 0..16, «0123456789abcdef»)
+        (LineComment, 16..18, «//»)
         "]]);
 
-        check("//\n", &expect![[r"
-            (LineComment, 0..2, «//»)
-            (Whitespace, 2..3, «
-            »)
+        check("0123456789abcde//", &expect![[r"
+            (Int, 0..15, «0123456789abcde»)
+            (LineComment, 15..17, «//»)
         "]]);
 
-        check("//foo\n", &expect![[r"
-            (LineComment, 0..5, «//foo»)
-            (Whitespace, 5..6, «
-            »)
-        "]]);
-
-        check("//foo //bar\n", &expect![[r"
-            (LineComment, 0..11, «//foo //bar»)
-            (Whitespace, 11..12, «
-            »)
-        "]]);
-
-        check("//foo\n//bar\n", &expect![[r"
-            (LineComment, 0..5, «//foo»)
-            (Whitespace, 5..6, «
-            »)
-            (LineComment, 6..11, «//bar»)
-            (Whitespace, 11..12, «
-            »)
-        "]]);
-
-        check("//foo\nbar\n//foobar", &expect![[r"
-            (LineComment, 0..5, «//foo»)
-            (Whitespace, 5..6, «
-            »)
-            (Ident, 6..9, «bar»)
-            (Whitespace, 9..10, «
-            »)
-            (LineComment, 10..18, «//foobar»)
+        check("0123456789abcdefg//", &expect![[r"
+            (Int, 0..17, «0123456789abcdefg»)
+            (LineComment, 17..19, «//»)
         "]]);
     }
 }
