@@ -13,7 +13,7 @@ pub const EOF_BYTE: u8 = 0xFF;
 unsafe fn write_token(out: *mut u8, kind: TokenKind, len: u32) -> *mut u8 {
     unsafe {
         let out = write_and_advance(out, kind as u8);
-        write_and_advance(out, len)
+        write_and_advance(out.cast(), len).cast()
     }
 }
 

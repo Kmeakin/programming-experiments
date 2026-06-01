@@ -5,7 +5,7 @@ use std::simd::prelude::*;
 use crate::TokenKind;
 use crate::utils::bitstring::BitString;
 use crate::utils::simdx::*;
-use crate::utils::{align_down, write_and_advance};
+use crate::utils::{align_down, write_and_advance, write_token};
 
 pub const EOF_BYTE: u8 = 0xFF;
 
@@ -40,17 +40,6 @@ pub fn lex<'out, const VEC_LEN: usize>(input: &[u8], out: &'out mut [u8]) -> &'o
         let out_end = lex_loop(state);
         let out_len = out_end.offset_from_unsigned(out_start);
         &mut out[..out_len]
-    }
-}
-
-#[must_use]
-#[track_caller]
-unsafe fn write_token(out: *mut u8, kind: TokenKind, start: *const u8, end: *const u8) -> *mut u8 {
-    unsafe {
-        let len = end.offset_from_unsigned(start) as u32;
-        debug_assert_ne!(len, 0);
-        let out = write_and_advance(out, kind as u8);
-        write_and_advance(out, len)
     }
 }
 

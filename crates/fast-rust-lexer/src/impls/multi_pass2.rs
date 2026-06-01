@@ -28,16 +28,6 @@ pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> (Vec<u8>, Vec<u32>) {
     }
 }
 
-fn prefix_xor(mut bits: u64) -> u64 {
-    bits ^= bits << 1;
-    bits ^= bits << 2;
-    bits ^= bits << 4;
-    bits ^= bits << 8;
-    bits ^= bits << 16;
-    bits ^= bits << 32;
-    bits
-}
-
 fn fmt_bitmask<const VEC_LEN: usize>(bits: u64) -> impl std::fmt::Display {
     std::fmt::from_fn(move |f| match VEC_LEN {
         16 => write!(f, "{:0VEC_LEN$b}", (bits as u16).reverse_bits()),
@@ -127,54 +117,24 @@ fn escaped_chars_mask<const VEC_LEN: usize>(
     (escaped, prev_escaped)
 }
 
-fn idents_mask<const VEC_LEN: usize>(ident_chars: u64, mut prev_ident: bool) -> (u64, bool) {
-    // 1 at the start of each ident
-    // eg
-    // foo bar foobar
-    // 10001000100000
-    let id_starts = ident_chars & !(ident_chars << 1) & !u64::from(prev_ident);
+fn idents_mask<const VEC_LEN: usize>(id_chars: u64, carry: &mut Carry) -> u64 {
+    debug_assert_matches!(carry.ident, 1 | 0);
 
-    // 1 at the end of each ident
-    // eg
-    // foo bar foobar
-    // 00100010000001
-    let id_ends = ident_chars & !(ident_chars >> 1);
+    let id_starts = id_chars & !(id_chars << 1) & !carry.ident;
+    carry.ident = id_chars >> (VEC_LEN - 1);
+    debug_assert_matches!(carry.ident, 1 | 0);
 
-    // 1 at the start and end of each ident
-    // eg
-    // foo bar foobar
-    // 10101010100001
-    let idents = id_starts | (id_ends << 1);
-
-    prev_ident = ident_chars >> (VEC_LEN - 1) != 0;
-    (idents, prev_ident)
+    id_starts
 }
 
-fn whitespace_mask<const VEC_LEN: usize>(
-    whitespace_chars: u64,
-    mut prev_whitespace: bool,
-) -> (u64, bool) {
-    // 1 at the start of each whitespace run
-    // eg
-    // foo bar foobar
-    // 10001000100000
-    let whitespace_starts =
-        whitespace_chars & !(whitespace_chars << 1) & !u64::from(prev_whitespace);
+fn whitespace_mask<const VEC_LEN: usize>(ws_chars: u64, carry: &mut Carry) -> u64 {
+    debug_assert_matches!(carry.whitespace, 1 | 0);
 
-    // 1 at the end of each whitespace run
-    // eg
-    // foo bar foobar
-    // 00100010000001
-    let whitespace_ends = whitespace_chars & !(whitespace_chars >> 1);
+    let ws_starts = ws_chars & !(ws_chars << 1) & !carry.whitespace;
+    carry.whitespace = ws_chars >> (VEC_LEN - 1);
+    debug_assert_matches!(carry.whitespace, 1 | 0);
 
-    // 1 at the start and end of each whitespace run
-    // eg
-    // foo bar foobar
-    // 10101010100001
-    let whitespaces = whitespace_starts | (whitespace_ends << 1);
-
-    prev_whitespace = whitespace_chars >> (VEC_LEN - 1) != 0;
-    (whitespaces, prev_whitespace)
+    ws_starts
 }
 
 #[inline(always)]
@@ -201,39 +161,39 @@ unsafe fn write_indices<const VEC_LEN: usize>(mut out_ptr: *mut u32, mut mask: u
     }
 }
 
-#[inline]
-const fn ctz<const VEC_LEN: usize>(bits: u64) -> usize {
-    match VEC_LEN {
-        16 => (bits as u16).trailing_zeros() as usize,
-        32 => (bits as u32).trailing_zeros() as usize,
-        64 => bits.trailing_zeros() as usize,
-        _ => unreachable!(),
-    }
-}
-
 #[derive(Default)]
 #[allow(clippy::struct_excessive_bools)]
 struct Carry {
-    whitespace: bool,
-    ident:      bool,
-    escaped:    bool,
-    string:     bool,
-    slash:      bool,
+    whitespace: u64,
+    ident:      u64,
+    slash:      u64,
 }
 
-#[inline]
-fn token_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> u64 {
-    #[allow(non_snake_case)]
-    let ALL_ONES: u64 = const {
+struct Masks<const VEC_LEN: usize> {
+    whitespace:     u64,
+    idents:         u64,
+    puncts:         u64,
+    quotes:         u64,
+    apostrophes:    u64,
+    line_comments:  u64,
+    block_comments: u64,
+}
+impl<const VEC_LEN: usize> Masks<VEC_LEN> {
+    fn normals(&self) -> u64 {
+        let mask = self.whitespace | self.idents | self.puncts;
         match VEC_LEN {
-            16 => 0xFFFF,
-            32 => 0xFFFF_FFFF,
-            64 => 0xFFFF_FFFF_FFFF_FFFF,
+            16 => mask & 0xFFFF,
+            32 => mask & 0xFFFF_FFFF,
+            64 => mask,
             _ => unreachable!(),
         }
-    };
+    }
+    fn specials(&self) -> u64 {
+        self.quotes | self.apostrophes | self.line_comments | self.block_comments
+    }
+}
 
-    // let ws_chars = movemask(is_whitespace(vec));
+fn get_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> Masks<VEC_LEN> {
     let ws_chars = movemask(in_range(vec, 0x09, 0x0D) | eq(vec, b' '));
     let ident_chars = movemask(
         eq(vec, b'_')
@@ -246,90 +206,59 @@ fn token_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -
     deprintln!("ws_chars      = {}", fmt_bitmask::<VEC_LEN>(ws_chars));
     deprintln!("ident_chars   = {}", fmt_bitmask::<VEC_LEN>(ident_chars));
 
-    let whitespace;
-    (whitespace, carry.whitespace) = whitespace_mask::<VEC_LEN>(ws_chars, carry.whitespace);
-    deprintln!("whitespace    = {}", fmt_bitmask::<VEC_LEN>(whitespace));
+    let whitespace = whitespace_mask::<VEC_LEN>(ws_chars, carry);
+    deprintln!("ws_starts     = {}", fmt_bitmask::<VEC_LEN>(whitespace));
 
-    let idents;
-    (idents, carry.ident) = idents_mask::<VEC_LEN>(ident_chars, carry.ident);
-    deprintln!("idents        = {}", fmt_bitmask::<VEC_LEN>(idents));
+    let idents = idents_mask::<VEC_LEN>(ident_chars, carry);
+    deprintln!("ident_starts  = {}", fmt_bitmask::<VEC_LEN>(idents));
 
     // Any character that is not an alphanumeric char or a whitespace char is a
     // punctuation char.
     let puncts = !ws_chars & !ident_chars;
     deprintln!("punct         = {}", fmt_bitmask::<VEC_LEN>(puncts));
 
-    let mask = idents | puncts | whitespace;
-    let mask = (mask) & ALL_ONES;
-    deprintln!("mask          = {}", fmt_bitmask::<VEC_LEN>(mask));
+    let normal_starts = idents | puncts | whitespace;
+    deprintln!("normal_starts = {}", fmt_bitmask::<VEC_LEN>(normal_starts));
     deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
 
-    mask
-}
+    let quotes = movemask(eq(vec, b'"'));
+    let apostrophes = movemask(eq(vec, b'\''));
+    let slash = movemask(eq(vec, b'/'));
+    let star = movemask(eq(vec, b'*'));
 
-#[cfg(false)]
-fn foo() {
-    let backslashes = movemask(eq(vec, b'\\'));
-
-    let escaped_chars;
-    (escaped_chars, carry.escaped) = escaped_chars_mask::<VEC_LEN>(backslashes, carry.escaped);
-    let real_quotes = quotes & !escaped_chars;
-    deprintln!("escaped_chars = {}", fmt_bitmask::<VEC_LEN>(escaped_chars));
-    deprintln!("real_quotes   = {}", fmt_bitmask::<VEC_LEN>(real_quotes));
-
-    let strings = prefix_xor(real_quotes) ^ (if carry.string { ALL_ONES } else { 0 });
-    carry.string = strings >> (VEC_LEN - 1) != 0;
-    deprintln!("strings       = {}", fmt_bitmask::<VEC_LEN>(strings));
-    let open_quotes = real_quotes & strings;
-    let close_quotes = real_quotes & !strings;
-    deprintln!("open_quotes   = {}", fmt_bitmask::<VEC_LEN>(open_quotes));
-
-    deprintln!("close_quotes  = {}", fmt_bitmask::<VEC_LEN>(close_quotes));
-}
-
-// Return a mask of characters requiring special handling.
-#[inline]
-fn special_mask<const VEC_LEN: usize>(v: Simd<u8, VEC_LEN>, carry: &mut Carry) -> u64 {
-    let quote = movemask(eq(v, b'"'));
-    let apostrophe = movemask(eq(v, b'\''));
-    let slash = movemask(eq(v, b'/'));
-    let star = movemask(eq(v, b'*'));
-
-    let carry_slash = u64::from(carry.slash);
     let next_slash = slash >> 1;
     let next_star = star >> 1;
 
-    let line_comment = (carry_slash | (slash << 1)) & slash; // `//`
-    let block_comment = (carry_slash | (slash << 1)) & star; // `/*`
+    let line_comments = (carry.slash | (slash << 1)) & slash; // `//`
+    let block_comments = (carry.slash | (slash << 1)) & star; // `/*`
 
-    let line_comment = line_comment;
-    let block_comment = block_comment;
-
-    let specials = quote | apostrophe | line_comment | block_comment;
+    let specials = quotes | apostrophes | line_comments | block_comments;
 
     deprintln!();
-    deprintln!("v        = {}", ByteStr::new(&v));
-    deprintln!("\"        = {}", fmt_bitmask::<VEC_LEN>(quote));
-    deprintln!("'        = {}", fmt_bitmask::<VEC_LEN>(apostrophe));
+    deprintln!("vec      = {}", ByteStr::new(&vec));
+    deprintln!("\"        = {}", fmt_bitmask::<VEC_LEN>(quotes));
+    deprintln!("'        = {}", fmt_bitmask::<VEC_LEN>(apostrophes));
     deprintln!("*        = {}", fmt_bitmask::<VEC_LEN>(star));
-    deprintln!("* << 1   = {}", fmt_bitmask::<VEC_LEN>(next_star));
-    deprintln!("/ carry  = {}", fmt_bitmask::<VEC_LEN>(carry_slash));
+    deprintln!("* >> 1   = {}", fmt_bitmask::<VEC_LEN>(next_star));
+    deprintln!("/ carry  = {}", fmt_bitmask::<VEC_LEN>(carry.slash));
     deprintln!("/        = {}", fmt_bitmask::<VEC_LEN>(slash));
-    deprintln!("/ << 1   = {}", fmt_bitmask::<VEC_LEN>(next_slash));
-    deprintln!("//       = {}", fmt_bitmask::<VEC_LEN>(line_comment));
-    deprintln!("/*       = {}", fmt_bitmask::<VEC_LEN>(block_comment));
+    deprintln!("/ >> 1   = {}", fmt_bitmask::<VEC_LEN>(next_slash));
+    deprintln!("//       = {}", fmt_bitmask::<VEC_LEN>(line_comments));
+    deprintln!("/*       = {}", fmt_bitmask::<VEC_LEN>(block_comments));
     deprintln!("specials = {}", fmt_bitmask::<VEC_LEN>(specials));
     deprintln!();
 
-    carry.slash = slash >> (VEC_LEN - 1) != 0;
-    specials
-}
+    carry.slash = slash >> (VEC_LEN - 1);
 
-enum State {
-    Normal,
-    LineComment,
-    BlockComment,
-    DoubleQuote,
+    Masks {
+        whitespace,
+        idents,
+        puncts,
+        quotes,
+        apostrophes,
+        line_comments,
+        block_comments,
+    }
 }
 
 pub fn stage1<'a, const VEC_LEN: usize>(
@@ -348,171 +277,158 @@ pub fn stage1<'a, const VEC_LEN: usize>(
 
         let mut idx = 0;
         let mut carry = Carry::default();
-        let state = State::Normal;
         'outer: loop {
-            match state {
-                State::Normal => {
-                    let vec1 = load::<VEC_LEN>(src_ptr);
-                    let mut mask = token_mask(vec1, &mut carry);
-                    let specials = special_mask(vec1, &mut carry);
-                    if specials == 0 {
-                        write_indices::<VEC_LEN>(out_ptr, mask, idx);
-                        out_ptr = out_ptr.add(mask.count_ones() as usize);
-                    } else {
-                        while !(mask == 0 && specials == 0) {
-                            let mask_tz = mask.trailing_zeros().min(VEC_LEN as u32);
-                            let spec_tz = specials.trailing_zeros().min(VEC_LEN as u32);
+            let vec1 = load::<VEC_LEN>(src_ptr);
+            let mask1 = get_mask(vec1, &mut carry);
+            let normals = mask1.normals();
+            let specials = mask1.specials();
 
-                            if mask_tz != spec_tz {
-                                out_ptr = write_and_advance(out_ptr, idx + mask_tz);
-                                mask ^= mask.isolate_lowest_one();
-                                continue;
-                            }
+            if specials == 0 {
+                write_indices::<VEC_LEN>(out_ptr, normals, idx);
+                out_ptr = out_ptr.add(normals.count_ones() as usize);
+            } else {
+                let first_special = specials.isolate_lowest_one();
+                let normals = normals & (first_special - 1);
+                write_indices::<VEC_LEN>(out_ptr, normals, idx);
+                out_ptr = out_ptr.add(normals.count_ones() as usize);
 
-                            let token_start_pos = idx + mask_tz;
-                            let token_start_ptr = src_ptr.add(spec_tz as usize);
-                            let mut token_end_ptr = token_start_ptr.add(1);
+                let spec_tz = specials.trailing_zeros();
+                let token_start_pos = idx + spec_tz;
+                let token_start_ptr = src_ptr.add(spec_tz as usize);
+                let mut token_end_ptr = token_start_ptr.add(1);
 
-                            let prev_byte = token_start_ptr.sub(1).read();
-                            let byte = token_start_ptr.read();
-                            match byte {
-                                b'"' if prev_byte == b'r' => {
-                                    out_ptr = write_and_advance(out_ptr, token_start_pos);
-                                    loop {
-                                        match token_end_ptr.read() {
-                                            b'"' => {
-                                                token_end_ptr = token_end_ptr.add(1);
-                                                break;
-                                            }
-                                            EOF_BYTE => break,
-                                            _ => token_end_ptr = token_end_ptr.add(1),
-                                        }
-                                    }
-                                }
-                                b'"' if prev_byte == b'#' => {
-                                    out_ptr = write_and_advance(out_ptr, token_start_pos);
-                                    let num_hashes = {
-                                        let mut n = 0u32;
-                                        let mut ptr = token_start_ptr.sub(1);
-                                        while ptr.read() == b'#' {
-                                            n += 1;
-                                            ptr = ptr.sub(1);
-                                        }
-                                        n
-                                    };
-
-                                    'foo: loop {
-                                        match token_end_ptr.read() {
-                                            b'"' => {
-                                                token_end_ptr = token_end_ptr.add(1);
-                                                let mut hashes = num_hashes;
-                                                while token_end_ptr.read() == b'#' {
-                                                    hashes -= 1;
-                                                    token_end_ptr = token_end_ptr.add(1);
-                                                    if hashes == 0 {
-                                                        break 'foo;
-                                                    }
-                                                }
-                                            }
-                                            EOF_BYTE => break,
-                                            _ => token_end_ptr = token_end_ptr.add(1),
-                                        }
-                                    }
-                                }
+                let prev_byte = token_start_ptr.sub(1).read();
+                let byte = token_start_ptr.read();
+                match byte {
+                    b'"' if prev_byte == b'r' => {
+                        out_ptr = write_and_advance(out_ptr, token_start_pos);
+                        loop {
+                            match token_end_ptr.read() {
                                 b'"' => {
-                                    out_ptr = write_and_advance(out_ptr, token_start_pos);
-                                    loop {
-                                        match token_end_ptr.read() {
-                                            b'"' => {
-                                                token_end_ptr = token_end_ptr.add(1);
-                                                break;
-                                            }
-                                            EOF_BYTE => break,
-                                            b'\\' => token_end_ptr = token_end_ptr.add(2),
-                                            _ => token_end_ptr = token_end_ptr.add(1),
-                                        }
-                                    }
+                                    token_end_ptr = token_end_ptr.add(1);
+                                    break;
                                 }
-                                b'\'' => {
-                                    out_ptr = write_and_advance(out_ptr, token_start_pos);
-                                    if let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' =
-                                        token_end_ptr.read()
-                                    {
-                                        while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' =
-                                            token_end_ptr.read()
-                                        {
-                                            token_end_ptr = token_end_ptr.add(1);
-                                        }
-                                        if token_end_ptr.read() == b'\'' {
-                                            token_end_ptr = token_end_ptr.add(1);
-                                        }
-                                    } else {
-                                        loop {
-                                            match token_end_ptr.read() {
-                                                b'\'' => {
-                                                    token_end_ptr = token_end_ptr.add(1);
-                                                    break;
-                                                }
-                                                EOF_BYTE => break,
-                                                b'\\' => token_end_ptr = token_end_ptr.add(2),
-                                                _ => token_end_ptr = token_end_ptr.add(1),
-                                            }
-                                        }
-                                    }
-                                }
-                                b'/' if prev_byte == b'/' => {
-                                    // out_ptr = write_and_advance(out_ptr, token_start_pos - 1);
-                                    loop {
-                                        match token_end_ptr.read() {
-                                            b'\n' | EOF_BYTE => break,
-                                            _ => token_end_ptr = token_end_ptr.add(1),
-                                        }
-                                    }
-                                }
-                                b'*' if prev_byte == b'/' => {
-                                    // out_ptr = write_and_advance(out_ptr, token_start_pos - 1);
-                                    let mut depth = 1;
-                                    loop {
-                                        match &token_end_ptr.cast::<[u8; 2]>().read() {
-                                            b"/*" => {
-                                                token_end_ptr = token_end_ptr.add(2);
-                                                depth += 1;
-                                            }
-                                            b"*/" => {
-                                                token_end_ptr = token_end_ptr.add(2);
-                                                depth -= 1;
-                                                if depth == 0 {
-                                                    break;
-                                                }
-                                            }
-                                            [EOF_BYTE, _] => break,
-                                            _ => token_end_ptr = token_end_ptr.add(1),
-                                        }
-                                    }
-                                }
-                                _ => unreachable!(
-                                    "unknown token start: {}",
-                                    ByteStr::new(&token_start_ptr.cast::<[u8; 32]>().read())
-                                ),
+                                EOF_BYTE => break,
+                                _ => token_end_ptr = token_end_ptr.add(1),
                             }
-
-                            let token_end_pos =
-                                token_end_ptr.offset_from_unsigned(src_start) as u32;
-                            src_ptr = token_end_ptr;
-                            idx = token_end_pos;
-                            carry = Carry::default();
-                            continue 'outer;
                         }
                     }
-                    idx += VEC_LEN as u32;
-                    src_ptr = src_ptr.add(VEC_LEN);
-                    if src_ptr >= src_end {
-                        break;
+                    b'"' if prev_byte == b'#' => {
+                        out_ptr = write_and_advance(out_ptr, token_start_pos);
+                        let num_hashes = {
+                            let mut n = 0u32;
+                            let mut ptr = token_start_ptr.sub(1);
+                            while ptr.read() == b'#' {
+                                n += 1;
+                                ptr = ptr.sub(1);
+                            }
+                            n
+                        };
+
+                        'foo: loop {
+                            match token_end_ptr.read() {
+                                b'"' => {
+                                    token_end_ptr = token_end_ptr.add(1);
+                                    let mut hashes = num_hashes;
+                                    while token_end_ptr.read() == b'#' {
+                                        hashes -= 1;
+                                        token_end_ptr = token_end_ptr.add(1);
+                                        if hashes == 0 {
+                                            break 'foo;
+                                        }
+                                    }
+                                }
+                                EOF_BYTE => break,
+                                _ => token_end_ptr = token_end_ptr.add(1),
+                            }
+                        }
                     }
+                    b'"' => {
+                        out_ptr = write_and_advance(out_ptr, token_start_pos);
+                        loop {
+                            match token_end_ptr.read() {
+                                b'"' => {
+                                    token_end_ptr = token_end_ptr.add(1);
+                                    break;
+                                }
+                                EOF_BYTE => break,
+                                b'\\' => token_end_ptr = token_end_ptr.add(2),
+                                _ => token_end_ptr = token_end_ptr.add(1),
+                            }
+                        }
+                    }
+                    b'\'' => {
+                        out_ptr = write_and_advance(out_ptr, token_start_pos);
+                        if let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = token_end_ptr.read()
+                        {
+                            while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' =
+                                token_end_ptr.read()
+                            {
+                                token_end_ptr = token_end_ptr.add(1);
+                            }
+                            if token_end_ptr.read() == b'\'' {
+                                token_end_ptr = token_end_ptr.add(1);
+                            }
+                        } else {
+                            loop {
+                                match token_end_ptr.read() {
+                                    b'\'' => {
+                                        token_end_ptr = token_end_ptr.add(1);
+                                        break;
+                                    }
+                                    EOF_BYTE => break,
+                                    b'\\' => token_end_ptr = token_end_ptr.add(2),
+                                    _ => token_end_ptr = token_end_ptr.add(1),
+                                }
+                            }
+                        }
+                    }
+                    b'/' if prev_byte == b'/' => {
+                        // out_ptr = write_and_advance(out_ptr, token_start_pos - 1);
+                        loop {
+                            match token_end_ptr.read() {
+                                b'\n' | EOF_BYTE => break,
+                                _ => token_end_ptr = token_end_ptr.add(1),
+                            }
+                        }
+                    }
+                    b'*' if prev_byte == b'/' => {
+                        // out_ptr = write_and_advance(out_ptr, token_start_pos - 1);
+                        let mut depth = 1;
+                        loop {
+                            match &token_end_ptr.cast::<[u8; 2]>().read() {
+                                b"/*" => {
+                                    token_end_ptr = token_end_ptr.add(2);
+                                    depth += 1;
+                                }
+                                b"*/" => {
+                                    token_end_ptr = token_end_ptr.add(2);
+                                    depth -= 1;
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                }
+                                [EOF_BYTE, _] => break,
+                                _ => token_end_ptr = token_end_ptr.add(1),
+                            }
+                        }
+                    }
+                    _ => unreachable!(
+                        "unknown token start: {}",
+                        ByteStr::new(&token_start_ptr.cast::<[u8; 32]>().read())
+                    ),
                 }
-                State::LineComment => todo!(),
-                State::BlockComment => todo!(),
-                State::DoubleQuote => todo!(),
+
+                let token_end_pos = token_end_ptr.offset_from_unsigned(src_start) as u32;
+                src_ptr = token_end_ptr;
+                idx = token_end_pos;
+                carry = Carry::default();
+                continue 'outer;
+            }
+            idx += VEC_LEN as u32;
+            src_ptr = src_ptr.add(VEC_LEN);
+            if src_ptr >= src_end {
+                break;
             }
         }
 

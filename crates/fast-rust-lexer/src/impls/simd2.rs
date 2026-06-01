@@ -5,7 +5,7 @@ use std::simd::prelude::*;
 use crate::TokenKind;
 use crate::utils::bitstring::BitString;
 use crate::utils::simdx::*;
-use crate::utils::write_and_advance;
+use crate::utils::{write_and_advance, write_token};
 
 // TODO:
 // * Optimize number parsing
@@ -13,16 +13,6 @@ use crate::utils::write_and_advance;
 // * Optimize loop dispatch using `loop_match`?
 
 pub const EOF_BYTE: u8 = 0xFF;
-
-#[must_use]
-unsafe fn write_token(out: *mut u8, kind: TokenKind, start: *const u8, end: *const u8) -> *mut u8 {
-    unsafe {
-        let len = end.offset_from_unsigned(start) as u32;
-        debug_assert_ne!(len, 0);
-        let out = write_and_advance(out, kind as u8);
-        write_and_advance(out, len)
-    }
-}
 
 #[must_use]
 unsafe fn write_punct(out: *mut u8, kind: u8) -> *mut u8 { unsafe { write_and_advance(out, kind) } }
@@ -95,12 +85,13 @@ fn whitespace_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> Mask<i8, VEC
     }
 }
 
-#[cfg(false)]
+// #[cfg(false)]
 fn whitespace_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
     let mask = eq(vec, b' ') | eq(vec, b'\n') | eq(vec, b'\t');
     BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
 }
 
+#[cfg(false)]
 fn whitespace_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
     BitString::new(movemask(whitespace_mask(vec)).reverse_bits())
 }
@@ -115,16 +106,6 @@ fn ident_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VE
         | in_range(vec, b'a', b'z')
         | in_range(vec, b'A', b'Z')
         | in_range(vec, b'0', b'9');
-    BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
-}
-
-fn digits_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
-    let mask = eq(vec, b'_') | in_range(vec, b'0', b'9');
-    BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
-}
-
-fn single_quote_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>) -> BitString<VEC_LEN> {
-    let mask = eq(vec, b'\'');
     BitString::<VEC_LEN>::new(movemask(mask).reverse_bits())
 }
 
@@ -143,8 +124,6 @@ enum MaskId {
     Whitespace,
     Newline,
     Ident,
-    Digits,
-    SingleQuote,
     DoubleQuote,
     Slash,
 }
@@ -154,8 +133,6 @@ struct Masks<const VEC_LEN: usize> {
     whitespace:   BitString<VEC_LEN>,
     newline:      BitString<VEC_LEN>,
     ident:        BitString<VEC_LEN>,
-    digits:       BitString<VEC_LEN>,
-    single_quote: BitString<VEC_LEN>,
     double_quote: BitString<VEC_LEN>,
     slash:        BitString<VEC_LEN>,
 }
@@ -166,8 +143,6 @@ impl<const VEC_LEN: usize> Masks<VEC_LEN> {
             whitespace:   whitespace_bitstring(vec),
             newline:      newline_bitstring(vec),
             ident:        ident_bitstring(vec),
-            digits:       digits_bitstring(vec),
-            single_quote: single_quote_bitstring(vec),
             double_quote: double_quote_bitstring(vec),
             slash:        slash_bitstring(vec),
         }
@@ -180,8 +155,6 @@ fn get_bitstring<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, id: MaskId) -> Bi
         MaskId::Whitespace => whitespace_bitstring(vec),
         MaskId::Newline => newline_bitstring(vec),
         MaskId::Ident => ident_bitstring(vec),
-        MaskId::Digits => digits_bitstring(vec),
-        MaskId::SingleQuote => single_quote_bitstring(vec),
         MaskId::DoubleQuote => double_quote_bitstring(vec),
         MaskId::Slash => slash_bitstring(vec),
     }
@@ -194,8 +167,6 @@ impl<const VEC_LEN: usize> std::ops::Index<MaskId> for Masks<VEC_LEN> {
             MaskId::Whitespace => &self.whitespace,
             MaskId::Newline => &self.newline,
             MaskId::Ident => &self.ident,
-            MaskId::Digits => &self.digits,
-            MaskId::SingleQuote => &self.single_quote,
             MaskId::DoubleQuote => &self.double_quote,
             MaskId::Slash => &self.slash,
         }
@@ -208,8 +179,6 @@ impl<const VEC_LEN: usize> std::ops::IndexMut<MaskId> for Masks<VEC_LEN> {
             MaskId::Whitespace => &mut self.whitespace,
             MaskId::Newline => &mut self.newline,
             MaskId::Ident => &mut self.ident,
-            MaskId::Digits => &mut self.digits,
-            MaskId::SingleQuote => &mut self.single_quote,
             MaskId::DoubleQuote => &mut self.double_quote,
             MaskId::Slash => &mut self.slash,
         }
@@ -371,7 +340,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         }
                         continue;
                     }
-                    (chunk_ptr, src) = eat_single_quote_string(chunk_ptr, src, src_end, &mut masks);
+                    (chunk_ptr, src) = eat_single_quote_string(chunk_ptr, src, src_end);
                     out = write_token(out, TokenKind::Char, token_start, src);
                 }
                 b'\"' => {
@@ -406,8 +375,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                     }
                     [b'\'', ..] => {
                         src = src.add(2);
-                        (chunk_ptr, src) =
-                            eat_single_quote_string(chunk_ptr, src, src_end, &mut masks);
+                        (chunk_ptr, src) = eat_single_quote_string(chunk_ptr, src, src_end);
                         out = write_token(out, TokenKind::Byte, token_start, src);
                     }
                     _ => {
@@ -486,7 +454,7 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                 }
 
                 b'0'..=b'9' => {
-                    (chunk_ptr, src) = eat_while(chunk_ptr, src, &mut masks, MaskId::Digits);
+                    (chunk_ptr, src) = eat_while(chunk_ptr, src, &mut masks, MaskId::Ident);
                     let mut kind = match src.cast::<[u8; 2]>().read() {
                         [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_'] => {
                             out = write_token(out, TokenKind::Int, token_start, src);
@@ -494,16 +462,16 @@ unsafe fn lex_loop<const VEC_LEN: usize>(
                         }
                         [b'.', _] => {
                             src = src.add(1);
-                            (chunk_ptr, src) =
-                                eat_while(chunk_ptr, src, &mut masks, MaskId::Digits);
+                            (chunk_ptr, src) = eat_while(chunk_ptr, src, &mut masks, MaskId::Ident);
                             TokenKind::Float
                         }
                         _ => TokenKind::Int,
                     };
 
-                    if let b'e' | b'E' = src.read() {
+                    if let b'+' | b'-' | b'0'..=b'9' = src.read()
+                        && let b'e' | b'E' = src.sub(1).read()
+                    {
                         kind = TokenKind::Float;
-                        src = src.add(1);
                         src = src.add(usize::from(matches!(src.read(), b'+' | b'-')));
                     }
 
@@ -569,35 +537,30 @@ fn eat_block_comment<const VEC_LEN: usize>(
 }
 
 #[inline(always)]
-fn eat_single_quote_string<const VEC_LEN: usize>(
-    mut chunk_ptr: *const u8,
+fn eat_single_quote_string(
+    chunk_ptr: *const u8,
     mut src: *const u8,
     src_end: *const u8,
-    masks: &mut Masks<VEC_LEN>,
 ) -> (*const u8, *const u8) {
     unsafe {
         debug_assert_eq!(src.sub(1).read(), b'\'');
         loop {
-            match eat_until(chunk_ptr, src, src_end, masks, MaskId::SingleQuote) {
-                Err(src_end) => {
-                    return (src_end, src_end);
+            let b = src.read();
+            if b == b'\'' {
+                let mut backslashes = 0;
+                let mut src_back = src.sub(1);
+                while src_back.read() == b'\\' {
+                    backslashes += 1;
+                    src_back = src_back.sub(1);
                 }
-                Ok(ok) => {
-                    (chunk_ptr, src) = ok;
-                    debug_assert_eq!(src.read(), b'\'');
-
-                    let mut backslashes = 0;
-                    let mut src_back = src.sub(1);
-                    while src_back.read() == b'\\' {
-                        backslashes += 1;
-                        src_back = src_back.sub(1);
-                    }
-
-                    src = src.add(1);
-                    if backslashes % 2 == 0 {
-                        return (chunk_ptr, src);
-                    }
+                src = src.add(1);
+                if backslashes % 2 == 0 {
+                    return (chunk_ptr, src);
                 }
+            } else if b == EOF_BYTE {
+                return (src_end, src_end);
+            } else {
+                src = src.add(1);
             }
         }
     }

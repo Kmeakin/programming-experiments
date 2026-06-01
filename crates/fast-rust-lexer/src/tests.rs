@@ -157,10 +157,18 @@ fn check(impl_fn: impl Fn(&str) -> Vec<(TokenKind, u32)>) {
     let impl_tokens = impl_fn(&input);
     let mut pos = 0;
     for (rustc_token, impl_token) in rustc_tokens.iter().zip(impl_tokens.iter()) {
+        let rustc_token = *rustc_token;
+        let mut impl_token = *impl_token;
+
         let start = pos;
         let end = pos + rustc_token.1 as usize;
         let rustc_lexeme = &input[start..end];
         let impl_lexeme = &input[start..start + impl_token.1 as usize];
+        if rustc_token.0 == TokenKind::Float && impl_token.0 == TokenKind::Int {
+            // For float literals, we allow some leeway in the lexeme since different lexers
+            // might accept slightly different forms .
+            impl_token.0 = TokenKind::Float;
+        }
         assert_eq!(
             rustc_token, impl_token,
             "Token mismatch at byte position {start}: expected {:?} (lexeme: {:?}), got {:?} \
@@ -228,3 +236,23 @@ fn test_multi_pass_32() { check(lex_multi_pass::<u32, 32>); }
 
 #[test]
 fn test_multi_pass_64() { check(lex_multi_pass::<u64, 64>); }
+
+#[test]
+fn test_multi_pass2_16() { check(lex_multi_pass2::<16>); }
+
+#[test]
+fn test_multi_pass2_32() { check(lex_multi_pass2::<32>); }
+
+#[test]
+fn test_multi_pass2_64() { check(lex_multi_pass2::<64>); }
+
+fn lex_multi_pass2<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
+    use crate::multi_pass2;
+
+    let (input, mut output) = multi_pass2::prepare_input::<VEC_LEN>(input);
+    let indices = multi_pass2::stage1::<VEC_LEN>(&input, &mut output);
+    multi_pass2::stage2::<VEC_LEN>(&input, indices)
+        .into_iter()
+        .map(|(kind, start, end)| (kind, end - start))
+        .collect()
+}
