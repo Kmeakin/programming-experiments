@@ -147,14 +147,14 @@ unsafe fn write_indices<const VEC_LEN: usize>(mut out_ptr: *mut u32, mut mask: u
             while mask != 0 {
                 unroll!(16, {
                     out_ptr = write_and_advance(out_ptr, idx + mask.leading_zeros().min(ceil));
-                    mask ^= mask.isolate_highest_one();
+                    mask &= !mask.isolate_highest_one();
                 });
             }
         } else {
             while mask != 0 {
                 unroll!(16, {
                     out_ptr = write_and_advance(out_ptr, idx + mask.trailing_zeros().min(ceil));
-                    mask ^= mask.isolate_lowest_one();
+                    mask &= !mask.isolate_lowest_one();
                 });
             }
         }
@@ -170,13 +170,12 @@ struct Carry {
 }
 
 struct Masks<const VEC_LEN: usize> {
-    whitespace:     u64,
-    idents:         u64,
-    puncts:         u64,
-    quotes:         u64,
-    apostrophes:    u64,
-    line_comments:  u64,
-    block_comments: u64,
+    whitespace:            u64,
+    idents:                u64,
+    puncts:                u64,
+    quotes_or_apostrophes: u64,
+    line_comments:         u64,
+    block_comments:        u64,
 }
 impl<const VEC_LEN: usize> Masks<VEC_LEN> {
     fn normals(&self) -> u64 {
@@ -189,7 +188,7 @@ impl<const VEC_LEN: usize> Masks<VEC_LEN> {
         }
     }
     fn specials(&self) -> u64 {
-        self.quotes | self.apostrophes | self.line_comments | self.block_comments
+        self.quotes_or_apostrophes | self.line_comments | self.block_comments
     }
 }
 
@@ -221,8 +220,7 @@ fn get_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> 
     deprintln!("normal_starts = {}", fmt_bitmask::<VEC_LEN>(normal_starts));
     deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
 
-    let quotes = movemask(eq(vec, b'"'));
-    let apostrophes = movemask(eq(vec, b'\''));
+    let quotes_or_apostrophes = movemask(eq(vec, b'"') | eq(vec, b'\''));
     let slash = movemask(eq(vec, b'/'));
     let star = movemask(eq(vec, b'*'));
 
@@ -232,12 +230,12 @@ fn get_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> 
     let line_comments = (carry.slash | (slash << 1)) & slash; // `//`
     let block_comments = (carry.slash | (slash << 1)) & star; // `/*`
 
-    let specials = quotes | apostrophes | line_comments | block_comments;
+    let specials = quotes_or_apostrophes | line_comments | block_comments;
 
     deprintln!();
     deprintln!("vec      = {}", ByteStr::new(&vec));
-    deprintln!("\"        = {}", fmt_bitmask::<VEC_LEN>(quotes));
-    deprintln!("'        = {}", fmt_bitmask::<VEC_LEN>(apostrophes));
+    // deprintln!("\"        = {}", fmt_bitmask::<VEC_LEN>(quotes));
+    // deprintln!("'        = {}", fmt_bitmask::<VEC_LEN>(apostrophes));
     deprintln!("*        = {}", fmt_bitmask::<VEC_LEN>(star));
     deprintln!("* >> 1   = {}", fmt_bitmask::<VEC_LEN>(next_star));
     deprintln!("/ carry  = {}", fmt_bitmask::<VEC_LEN>(carry.slash));
@@ -254,8 +252,7 @@ fn get_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> 
         whitespace,
         idents,
         puncts,
-        quotes,
-        apostrophes,
+        quotes_or_apostrophes,
         line_comments,
         block_comments,
     }
@@ -383,17 +380,13 @@ pub fn stage1<'a, const VEC_LEN: usize>(
                             }
                         }
                     }
-                    b'/' if prev_byte == b'/' => {
-                        // out_ptr = write_and_advance(out_ptr, token_start_pos - 1);
-                        loop {
-                            match token_end_ptr.read() {
-                                b'\n' | EOF_BYTE => break,
-                                _ => token_end_ptr = token_end_ptr.add(1),
-                            }
+                    b'/' if prev_byte == b'/' => loop {
+                        match token_end_ptr.read() {
+                            b'\n' | EOF_BYTE => break,
+                            _ => token_end_ptr = token_end_ptr.add(1),
                         }
-                    }
+                    },
                     b'*' if prev_byte == b'/' => {
-                        // out_ptr = write_and_advance(out_ptr, token_start_pos - 1);
                         let mut depth = 1;
                         loop {
                             match &token_end_ptr.cast::<[u8; 2]>().read() {
