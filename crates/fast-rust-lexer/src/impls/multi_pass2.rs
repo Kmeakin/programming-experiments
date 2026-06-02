@@ -380,12 +380,23 @@ pub fn stage1<'a, const VEC_LEN: usize>(
                             }
                         }
                     }
-                    b'/' if prev_byte == b'/' => loop {
-                        match token_end_ptr.read() {
-                            b'\n' | EOF_BYTE => break,
-                            _ => token_end_ptr = token_end_ptr.add(1),
+                    b'/' if prev_byte == b'/' => {
+                        let mut src_ptr = token_end_ptr;
+                        loop {
+                            let vec = load::<VEC_LEN>(src_ptr);
+                            let newlines = movemask(eq(vec, b'\n'));
+                            let tz = newlines.trailing_zeros().min(VEC_LEN as u32);
+                            if tz != VEC_LEN as u32 {
+                                token_end_ptr = src_ptr.add(tz as usize);
+                                break;
+                            }
+                            src_ptr = src_ptr.add(VEC_LEN);
+                            if src_ptr >= src_end {
+                                token_end_ptr = src_end;
+                                break;
+                            }
                         }
-                    },
+                    }
                     b'*' if prev_byte == b'/' => {
                         let mut depth = 1;
                         loop {
