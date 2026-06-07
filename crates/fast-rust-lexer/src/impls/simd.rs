@@ -34,6 +34,13 @@ struct Carry {
     slash:      u64,
 }
 
+struct Chunk {
+    whitespace: u64,
+    idents:     u64,
+    puncts:     u64,
+    newlines:   u64,
+}
+
 fn mask_starts<const VEC_LEN: usize>(mask: u64, carry: &mut u64) -> u64 {
     debug_assert_matches!(*carry, 1 | 0);
 
@@ -44,7 +51,8 @@ fn mask_starts<const VEC_LEN: usize>(mask: u64, carry: &mut u64) -> u64 {
     starts
 }
 
-fn get_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> u64 {
+#[inline]
+fn get_chunk<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> Chunk {
     let ws_chars = movemask(in_range(vec, 0x09, 0x0D) | eq(vec, b' '));
     let ident_chars = movemask(
         eq(vec, b'_')
@@ -52,9 +60,11 @@ fn get_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> 
             | in_range(vec, b'A', b'Z')
             | in_range(vec, b'0', b'9'),
     );
+    let newlines = movemask(eq(vec, b'\n'));
 
     deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
     deprintln!("ws_chars      = {}", fmt_bitmask::<VEC_LEN>(ws_chars));
+    deprintln!("newlines      = {}", fmt_bitmask::<VEC_LEN>(newlines));
     deprintln!("ident_chars   = {}", fmt_bitmask::<VEC_LEN>(ident_chars));
 
     let whitespace = mask_starts::<VEC_LEN>(ws_chars, &mut carry.whitespace);
@@ -72,7 +82,6 @@ fn get_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> 
     deprintln!("normal_starts = {}", fmt_bitmask::<VEC_LEN>(normal_starts));
     deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
 
-    let quotes_or_apostrophes = movemask(eq(vec, b'"') | eq(vec, b'\''));
     let slash = movemask(eq(vec, b'/'));
     let star = movemask(eq(vec, b'*'));
 
@@ -82,12 +91,8 @@ fn get_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> 
     let line_comments = (carry.slash | (slash << 1)) & slash; // `//`
     let block_comments = (carry.slash | (slash << 1)) & star; // `/*`
 
-    let specials = quotes_or_apostrophes | line_comments | block_comments;
-
     deprintln!();
     deprintln!("vec      = {}", ByteStr::new(&vec));
-    // deprintln!("\"        = {}", fmt_bitmask::<VEC_LEN>(quotes));
-    // deprintln!("'        = {}", fmt_bitmask::<VEC_LEN>(apostrophes));
     deprintln!("*        = {}", fmt_bitmask::<VEC_LEN>(star));
     deprintln!("* >> 1   = {}", fmt_bitmask::<VEC_LEN>(next_star));
     deprintln!("/ carry  = {}", fmt_bitmask::<VEC_LEN>(carry.slash));
@@ -95,18 +100,37 @@ fn get_mask<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) -> 
     deprintln!("/ >> 1   = {}", fmt_bitmask::<VEC_LEN>(next_slash));
     deprintln!("//       = {}", fmt_bitmask::<VEC_LEN>(line_comments));
     deprintln!("/*       = {}", fmt_bitmask::<VEC_LEN>(block_comments));
-    deprintln!("specials = {}", fmt_bitmask::<VEC_LEN>(specials));
     deprintln!();
 
     carry.slash = slash >> (VEC_LEN - 1);
 
-    let mask = whitespace | idents | puncts;
-    match VEC_LEN {
-        16 => mask & 0xffff,
-        32 => mask & 0xffff_ffff,
-        64 => mask,
-        _ => unreachable!(),
+    Chunk {
+        whitespace,
+        idents,
+        puncts,
+        newlines,
     }
+}
+
+pub fn lex_16<'out>(
+    padded_input: &[u8],
+    output: &'out mut Vec<(TokenKind, u32)>,
+) -> &'out mut [(TokenKind, u32)] {
+    lex::<16>(padded_input, output)
+}
+
+pub fn lex_32<'out>(
+    padded_input: &[u8],
+    output: &'out mut Vec<(TokenKind, u32)>,
+) -> &'out mut [(TokenKind, u32)] {
+    lex::<32>(padded_input, output)
+}
+
+pub fn lex_64<'out>(
+    padded_input: &[u8],
+    output: &'out mut Vec<(TokenKind, u32)>,
+) -> &'out mut [(TokenKind, u32)] {
+    lex::<64>(padded_input, output)
 }
 
 pub fn lex<'out, const VEC_LEN: usize>(
@@ -131,47 +155,46 @@ pub fn lex<'out, const VEC_LEN: usize>(
 
         'outer: loop {
             let vec = load::<VEC_LEN>(src_ptr);
-            let mut mask = get_mask(vec, &mut carry);
+            let mut chunk = get_chunk(vec, &mut carry);
+            let token_starts = chunk.idents | chunk.puncts | chunk.whitespace;
+            let mut token_starts = match VEC_LEN {
+                16 => token_starts & 0xffff,
+                32 => token_starts & 0xffff_ffff,
+                64 => token_starts,
+                _ => unreachable!(),
+            };
 
-            deprintln!("mask = {}", fmt_bitmask::<VEC_LEN>(mask));
-            while mask != 0 {
-                let tz = (mask.trailing_zeros() as usize).min(VEC_LEN);
-
-                deprintln!("mask = {}", fmt_bitmask::<VEC_LEN>(mask));
-                deprintln!("tz =   {tz}");
-
+            while token_starts != 0 {
+                let tz = (token_starts.trailing_zeros() as usize).min(VEC_LEN);
                 let token_start_ptr = src_ptr.add(tz);
-                debug_assert!(
-                    token_start_ptr <= padded_src_end,
-                    "token_start_ptr = {token_start_ptr:?}, padded_src_end = {padded_src_end:?}"
-                );
-
-                debug_assert!(
-                    out_ptr < out_end,
-                    "out_ptr = {out_ptr:?}, out_end = {out_end:?}"
-                );
-                let token_start_pos =
-                    token_start_ptr.offset_from_unsigned(padded_input.as_ptr()) as u32;
+                let token_start_pos = token_start_ptr.offset_from_unsigned(src_start) as u32;
                 let bytes = token_start_ptr.cast::<[u8; 4]>().read();
-                let kind = match bytes {
-                    [b' ' | 0x0a..=0x0d, ..] => TokenKind::Whitespace,
-                    [
-                        b @ (b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+'
-                        | b'-' | b'*' | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#'
-                        | b'@' | b'.' | b'!' | b'>' | b'<' | b'^'),
-                        ..,
-                    ] => TokenKind::from_u8(b).unwrap_unchecked(),
+                token_starts &= !token_starts.isolate_lowest_one();
 
+                let kind = match bytes {
                     [b'/', b'/', ..] => {
-                        let mut token_end_ptr = token_start_ptr.add(2);
-                        while token_end_ptr.read() != b'\n' && token_end_ptr.read() != EOF_BYTE {
-                            token_end_ptr = token_end_ptr.add(1);
+                        let newlines = chunk.newlines & token_starts;
+
+                        if newlines == 0 {
+                            let mut token_end_ptr = token_start_ptr.add(2);
+                            while token_end_ptr.read() != b'\n' && token_end_ptr.read() != EOF_BYTE
+                            {
+                                token_end_ptr = token_end_ptr.add(1);
+                            }
+                            out_ptr = write_and_advance(
+                                out_ptr,
+                                (TokenKind::LineComment, token_start_pos),
+                            );
+                            src_ptr = token_end_ptr;
+                            carry = Carry::default();
+                            continue 'outer;
                         }
-                        out_ptr =
-                            write_and_advance(out_ptr, (TokenKind::LineComment, token_start_pos));
-                        src_ptr = token_end_ptr;
-                        carry = Carry::default();
-                        continue 'outer;
+
+                        let lowest_one = newlines.isolate_lowest_one();
+                        token_starts &= !(lowest_one - 1);
+                        chunk.newlines &= !(lowest_one - 1);
+
+                        TokenKind::LineComment
                     }
                     [b'/', b'*', ..] => {
                         let mut depth = 1u32;
@@ -199,7 +222,6 @@ pub fn lex<'out, const VEC_LEN: usize>(
                         carry = Carry::default();
                         continue 'outer;
                     }
-                    [b'/', ..] => TokenKind::Slash,
 
                     [b'"', ..] => {
                         let mut token_end_ptr = token_start_ptr.add(1);
@@ -484,7 +506,6 @@ pub fn lex<'out, const VEC_LEN: usize>(
                         continue 'outer;
                     }
 
-                    [b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => TokenKind::Ident,
                     [b'0'..=b'9', ..] => {
                         let mut token_end_ptr = token_start_ptr.add(1);
                         while let b'0'..=b'9' | b'_' = token_end_ptr.read() {
@@ -530,17 +551,25 @@ pub fn lex<'out, const VEC_LEN: usize>(
                         continue 'outer;
                     }
 
+                    [b'/', ..] => TokenKind::Slash,
+                    [b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => TokenKind::Ident,
+                    [b' ' | 0x0a..=0x0d, ..] => TokenKind::Whitespace,
+                    [
+                        b @ (b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+'
+                        | b'-' | b'*' | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#'
+                        | b'@' | b'.' | b'!' | b'>' | b'<' | b'^'),
+                        ..,
+                    ] => TokenKind::from_u8(b).unwrap_unchecked(),
                     [EOF_BYTE, ..] => TokenKind::Eof,
                     _ => TokenKind::Unknown,
                 };
-
+                debug_assert!(out_ptr < out_end);
                 out_ptr = write_and_advance(out_ptr, (kind, token_start_pos));
-                mask &= !mask.isolate_lowest_one();
             }
 
             src_ptr = src_ptr.add(VEC_LEN);
             if src_ptr >= real_src_end {
-                break;
+                break 'outer;
             }
         }
     }
@@ -835,6 +864,13 @@ mod tests {
 
     #[test]
     fn line_comments() {
+        check("// foo\n//line comment EOF", &expect![[r"
+            (LineComment, 0..6, «// foo»)
+            (Whitespace, 6..7, «
+            »)
+            (LineComment, 7..25, «//line comment EOF»)
+        "]]);
+
         check("_123456789abcdef//", &expect![[r"
         (Ident, 0..16, «_123456789abcdef»)
         (LineComment, 16..18, «//»)
