@@ -6,3 +6,4 @@ pub mod multi_pass;
 pub mod multi_pass2;
 pub mod raw_ptr;
 pub mod rustc;
+pub mod simd;

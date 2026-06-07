@@ -28,15 +28,6 @@ pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> (Vec<u8>, Vec<u32>) {
     }
 }
 
-fn fmt_bitmask<const VEC_LEN: usize>(bits: u64) -> impl std::fmt::Display {
-    std::fmt::from_fn(move |f| match VEC_LEN {
-        16 => write!(f, "{:0VEC_LEN$b}", (bits as u16).reverse_bits()),
-        32 => write!(f, "{:0VEC_LEN$b}", (bits as u32).reverse_bits()),
-        64 => write!(f, "{:0VEC_LEN$b}", bits.reverse_bits()),
-        _ => unreachable!(),
-    })
-}
-
 /// Return a mask with 1s at each character which is escaped by an odd number of
 /// backslashes.
 fn escaped_chars_mask<const VEC_LEN: usize>(

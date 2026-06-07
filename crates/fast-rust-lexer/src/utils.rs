@@ -68,6 +68,16 @@ pub fn align_down<const ALIGN: usize>(ptr: *const u8) -> *const u8 {
     ptr.map_addr(|addr| addr & !(ALIGN - 1))
 }
 
+#[inline]
+pub fn fmt_bitmask<const VEC_LEN: usize>(bits: u64) -> impl std::fmt::Display {
+    std::fmt::from_fn(move |f| match VEC_LEN {
+        16 => write!(f, "{:0VEC_LEN$b}", (bits as u16).reverse_bits()),
+        32 => write!(f, "{:0VEC_LEN$b}", (bits as u32).reverse_bits()),
+        64 => write!(f, "{:0VEC_LEN$b}", bits.reverse_bits()),
+        _ => unreachable!(),
+    })
+}
+
 #[macro_export]
 macro_rules! unroll {
     (0, $block:block) => {};

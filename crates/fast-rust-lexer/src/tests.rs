@@ -1,4 +1,6 @@
-use crate::{TokenKind, multi_pass, raw_ptr, simd, simd2, simd3};
+use std::bstr::ByteStr;
+
+use crate::{TokenKind, multi_pass, raw_ptr, simd};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -48,77 +50,25 @@ fn lex_raw_ptr<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
 }
 
 fn lex_simd<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
-    debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
-    let mut input = input.as_bytes().to_vec();
-    input.extend([simd::EOF_BYTE; VEC_LEN]);
-    input.extend([simd::EOF_BYTE; VEC_LEN]);
-    let mut out_vec = vec![simd::EOF_BYTE; input.len() * 5];
-    let out = simd::lex::<VEC_LEN>(&input, &mut out_vec);
+    let (padded_input, mut token_vec) = simd::prepare_input::<VEC_LEN>(input);
+    let tokens = simd::lex::<VEC_LEN>(&padded_input, &mut token_vec) as &[_];
+    let mut out = Vec::new();
 
-    let mut tokens = Vec::new();
-    let mut iter = out.iter().copied();
-    while let Some(byte) = iter.next() {
-        if byte == simd::EOF_BYTE {
+    let mut iter = tokens.iter().copied();
+    let (mut kind, mut start) = iter.next().unwrap();
+
+    for (next_kind, next_start) in iter {
+        let len = next_start - start;
+        out.push((kind, len));
+
+        kind = next_kind;
+        start = next_start;
+        if start == input.len() as u32 {
             break;
         }
-        let Some(kind) = TokenKind::from_u8(byte) else {
-            panic!("Invalid token kind byte: {byte} ({byte:#04x})");
-        };
-        let len = match kind.is_punct() {
-            true => 1,
-            false => u32::from_ne_bytes(iter.next_chunk().expect("Expected length byte")),
-        };
-        tokens.push((kind, len));
     }
-    tokens
-}
 
-fn lex_simd2<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
-    debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
-    let input = simd2::prepare_input::<VEC_LEN>(input);
-    let mut out_vec = vec![simd::EOF_BYTE; input.len() * 5];
-    let out = simd2::lex::<VEC_LEN>(&input, &mut out_vec);
-
-    let mut tokens = Vec::new();
-    let mut iter = out.iter().copied();
-    while let Some(byte) = iter.next() {
-        if byte == simd::EOF_BYTE {
-            break;
-        }
-        let Some(kind) = TokenKind::from_u8(byte) else {
-            panic!("Invalid token kind byte: {byte} ({byte:#04x})");
-        };
-        let len = match kind.is_punct() {
-            true => 1,
-            false => u32::from_ne_bytes(iter.next_chunk().expect("Expected length byte")),
-        };
-        tokens.push((kind, len));
-    }
-    tokens
-}
-
-fn lex_simd3<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
-    debug_assert!(u32::try_from(input.len()).is_ok(), "input too long");
-    let input = simd3::prepare_input::<VEC_LEN>(input);
-    let mut out_vec = vec![simd::EOF_BYTE; input.len() * 5];
-    let out = simd3::lex::<VEC_LEN>(&input, &mut out_vec);
-
-    let mut tokens = Vec::new();
-    let mut iter = out.iter().copied();
-    while let Some(byte) = iter.next() {
-        if byte == simd::EOF_BYTE {
-            break;
-        }
-        let Some(kind) = TokenKind::from_u8(byte) else {
-            panic!("Invalid token kind byte: {byte} ({byte:#04x})");
-        };
-        let len = match kind.is_punct() {
-            true => 1,
-            false => u32::from_ne_bytes(iter.next_chunk().expect("Expected length byte")),
-        };
-        tokens.push((kind, len));
-    }
-    tokens
+    out
 }
 
 fn lex_multi_pass<W: multi_pass::Word, const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
@@ -162,8 +112,8 @@ fn check(impl_fn: impl Fn(&str) -> Vec<(TokenKind, u32)>) {
 
         let start = pos;
         let end = pos + rustc_token.1 as usize;
-        let rustc_lexeme = &input[start..end];
-        let impl_lexeme = &input[start..start + impl_token.1 as usize];
+        let rustc_lexeme = ByteStr::new(&input.as_bytes()[start..end]);
+        let impl_lexeme = ByteStr::new(&input.as_bytes()[start..start + impl_token.1 as usize]);
         if rustc_token.0 == TokenKind::Float && impl_token.0 == TokenKind::Int {
             // For float literals, we allow some leeway in the lexeme since different lexers
             // might accept slightly different forms .
@@ -171,9 +121,9 @@ fn check(impl_fn: impl Fn(&str) -> Vec<(TokenKind, u32)>) {
         }
         assert_eq!(
             rustc_token, impl_token,
-            "Token mismatch at byte position {start}: expected {:?} (lexeme: {:?}), got {:?} \
-             (lexeme: {:?})",
-            rustc_token.0, rustc_lexeme, impl_token.0, impl_lexeme
+            "Token mismatch at byte position {start}: expected {:?} (lexeme: «{rustc_lexeme}»), \
+             got {:?} (lexeme: «{impl_lexeme}»)",
+            rustc_token.0, impl_token.0
         );
         pos = end;
     }
@@ -209,24 +159,6 @@ fn test_simd_32() { check(lex_simd::<32>); }
 
 #[test]
 fn test_simd_64() { check(lex_simd::<64>); }
-
-#[test]
-fn test_simd2_16() { check(lex_simd2::<16>); }
-
-#[test]
-fn test_simd2_32() { check(lex_simd2::<32>); }
-
-#[test]
-fn test_simd2_64() { check(lex_simd2::<64>); }
-
-#[test]
-fn test_simd3_16() { check(lex_simd3::<16>); }
-
-#[test]
-fn test_simd3_32() { check(lex_simd3::<32>); }
-
-#[test]
-fn test_simd3_64() { check(lex_simd3::<64>); }
 
 #[test]
 fn test_multi_pass_16() { check(lex_multi_pass::<u16, 16>); }

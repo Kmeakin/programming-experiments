@@ -82,6 +82,7 @@ pub enum TokenKind {
     RawLifetime,
 
     Unknown,
+    Eof       = 0xff,
 }
 
 impl TokenKind {

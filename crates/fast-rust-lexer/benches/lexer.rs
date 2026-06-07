@@ -3,7 +3,7 @@ use std::ptr;
 
 use criterion::{Criterion, Throughput};
 use fast_rust_lexer::utils::push_unchecked;
-use fast_rust_lexer::{multi_pass, multi_pass2, raw_ptr, simd, simd2, simd3};
+use fast_rust_lexer::{multi_pass, multi_pass2, raw_ptr, simd};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -417,71 +417,16 @@ fn multi_pass<W: multi_pass::Word, const VEC_LEN: usize>(c: &mut Criterion) {
     group.finish();
 }
 
-fn simd(c: &mut Criterion) {
+fn simd<const VEC_LEN: usize>(c: &mut Criterion) {
     let input = get_input();
-    let mut input = input.into_bytes();
-    input.extend([simd::EOF_BYTE; 128]);
-    let input = input.as_slice();
+    let (input, mut output) = simd::prepare_input::<VEC_LEN>(&input);
 
     let mut group = c.benchmark_group("simd");
     group.throughput(Throughput::Bytes(input.len() as u64));
 
-    group.bench_function("simd::lex::<16>", |b| {
-        let mut output = vec![0xff; input.len() * 5];
+    group.bench_function(format!("simd::<{VEC_LEN}>"), |b| {
         b.iter(|| {
-            let output = simd::lex::<16>(input, &mut output);
-            black_box(output);
-        });
-    });
-
-    group.bench_function("simd::lex::<32>", |b| {
-        let mut output = vec![0xff; input.len() * 5];
-        b.iter(|| {
-            let output = simd::lex::<32>(input, &mut output);
-            black_box(output);
-        });
-    });
-
-    group.bench_function("simd::lex::<64>", |b| {
-        let mut output = vec![0xff; input.len() * 5];
-        b.iter(|| {
-            let output = simd::lex::<64>(input, &mut output);
-            black_box(output);
-        });
-    });
-
-    group.finish();
-}
-
-fn simd2<const VEC_LEN: usize>(c: &mut Criterion) {
-    let input = get_input();
-    let input = simd2::prepare_input::<VEC_LEN>(&input);
-
-    let mut group = c.benchmark_group("simd2");
-    group.throughput(Throughput::Bytes(input.len() as u64));
-
-    group.bench_function(format!("simd2::lex::<{VEC_LEN}>"), |b| {
-        let mut output = vec![0xff; input.len() * 5];
-        b.iter(|| {
-            let output = simd2::lex::<VEC_LEN>(&input, &mut output);
-            black_box(output);
-        });
-    });
-
-    group.finish();
-}
-
-fn simd3<const VEC_LEN: usize>(c: &mut Criterion) {
-    let input = get_input();
-    let input = simd2::prepare_input::<VEC_LEN>(&input);
-
-    let mut group = c.benchmark_group("simd3");
-    group.throughput(Throughput::Bytes(input.len() as u64));
-
-    group.bench_function(format!("simd3::lex::<{VEC_LEN}>"), |b| {
-        let mut output = vec![0xff; input.len() * 5];
-        b.iter(|| {
-            let output = simd3::lex::<VEC_LEN>(&input, &mut output);
+            let output = simd::lex::<VEC_LEN>(&input, &mut output);
             black_box(output);
         });
     });
@@ -531,13 +476,9 @@ fn main() {
     multi_pass::<u32, 32>(&mut criterion);
     multi_pass::<u64, 64>(&mut criterion);
 
-    simd2::<16>(&mut criterion);
-    simd2::<32>(&mut criterion);
-    simd2::<64>(&mut criterion);
-
-    simd3::<16>(&mut criterion);
-    simd3::<32>(&mut criterion);
-    simd3::<64>(&mut criterion);
+    simd::<16>(&mut criterion);
+    simd::<32>(&mut criterion);
+    simd::<64>(&mut criterion);
 
     multi_pass2::<16>(&mut criterion);
     multi_pass2::<32>(&mut criterion);
