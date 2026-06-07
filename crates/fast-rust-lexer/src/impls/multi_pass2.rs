@@ -445,7 +445,7 @@ pub fn stage1<'a, const VEC_LEN: usize>(
 }
 
 pub fn stage2<const VEC_LEN: usize>(src: &[u8], indexes: &[u32]) -> Vec<(TokenKind, u32, u32)> {
-    let mut tokens = Vec::new();
+    let mut tokens = Vec::with_capacity(indexes.len());
     let mut index_iter = indexes.iter().copied();
     let Some(mut start) = index_iter.next() else {
         return tokens;

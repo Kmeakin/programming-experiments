@@ -503,6 +503,14 @@ fn multi_pass2<const VEC_LEN: usize>(c: &mut Criterion) {
         });
     });
 
+    let indices = multi_pass2::stage1::<VEC_LEN>(&input, &mut output);
+    group.bench_function(format!("multi_pass2::stage2::<{VEC_LEN}>"), |b| {
+        b.iter(|| {
+            let output = multi_pass2::stage2::<VEC_LEN>(&input, indices);
+            black_box(output);
+        });
+    });
+
     group.finish();
 }
 
