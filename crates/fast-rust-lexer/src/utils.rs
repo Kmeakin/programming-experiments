@@ -127,7 +127,7 @@ pub use crate::unroll;
 #[macro_export]
 macro_rules! deprintln {
     ($($args:tt)*) => {
-        if cfg!(debug_assertions) && false {
+        if cfg!(debug_assertions) {
             eprintln!($($args)*);
         }
     };

@@ -122,8 +122,8 @@ fn check(impl_fn: impl Fn(&str) -> Vec<(TokenKind, u32)>) {
         }
         assert_eq!(
             rustc_token, impl_token,
-            "Token mismatch at byte position {start}: expected {:?} (lexeme: «{rustc_lexeme}»), \
-             got {:?} (lexeme: «{impl_lexeme}»)",
+            "Token mismatch at byte position {start}\nexpected {:?} (lexeme: \
+             «{rustc_lexeme}»),\ngot {:?} (lexeme: «{impl_lexeme}»)",
             rustc_token.0, impl_token.0
         );
         pos = end;

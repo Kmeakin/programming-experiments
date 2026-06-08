@@ -29,14 +29,14 @@ pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> Vec<u8> {
 struct Carry {
     whitespace: u64,
     ident:      u64,
-    slash:      u64,
 }
 
 struct Chunk {
-    whitespace: u64,
-    idents:     u64,
-    puncts:     u64,
-    newlines:   u64,
+    whitespace:   u64,
+    idents:       u64,
+    puncts:       u64,
+    newlines:     u64,
+    token_starts: u64,
 }
 
 fn mask_starts<const VEC_LEN: usize>(mask: u64, carry: &mut u64) -> u64 {
@@ -76,37 +76,23 @@ fn get_chunk<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) ->
     let puncts = !ws_chars & !ident_chars;
     deprintln!("punct         = {}", fmt_bitmask::<VEC_LEN>(puncts));
 
-    let normal_starts = idents | puncts | whitespace;
-    deprintln!("normal_starts = {}", fmt_bitmask::<VEC_LEN>(normal_starts));
+    let token_starts = idents | puncts | whitespace;
+    deprintln!("token_starts  = {}", fmt_bitmask::<VEC_LEN>(token_starts));
     deprintln!("vec           = {}", ByteStr::new(vec.as_array()));
 
-    let slash = movemask(eq(vec, b'/'));
-    let star = movemask(eq(vec, b'*'));
-
-    let next_slash = slash >> 1;
-    let next_star = star >> 1;
-
-    let line_comments = (carry.slash | (slash << 1)) & slash; // `//`
-    let block_comments = (carry.slash | (slash << 1)) & star; // `/*`
-
-    deprintln!();
-    deprintln!("vec      = {}", ByteStr::new(&vec));
-    deprintln!("*        = {}", fmt_bitmask::<VEC_LEN>(star));
-    deprintln!("* >> 1   = {}", fmt_bitmask::<VEC_LEN>(next_star));
-    deprintln!("/ carry  = {}", fmt_bitmask::<VEC_LEN>(carry.slash));
-    deprintln!("/        = {}", fmt_bitmask::<VEC_LEN>(slash));
-    deprintln!("/ >> 1   = {}", fmt_bitmask::<VEC_LEN>(next_slash));
-    deprintln!("//       = {}", fmt_bitmask::<VEC_LEN>(line_comments));
-    deprintln!("/*       = {}", fmt_bitmask::<VEC_LEN>(block_comments));
-    deprintln!();
-
-    carry.slash = slash >> (VEC_LEN - 1);
+    let token_starts = match VEC_LEN {
+        16 => token_starts & 0xffff,
+        32 => token_starts & 0xffff_ffff,
+        64 => token_starts,
+        _ => unreachable!(),
+    };
 
     Chunk {
         whitespace,
         idents,
         puncts,
         newlines,
+        token_starts,
     }
 }
 
@@ -124,41 +110,39 @@ pub fn lex<const VEC_LEN: usize>(padded_input: &[u8], mut on_token: impl FnMut(T
         'outer: loop {
             let vec = load::<VEC_LEN>(src_ptr);
             let mut chunk = get_chunk(vec, &mut carry);
-            let token_starts = chunk.idents | chunk.puncts | chunk.whitespace;
-            let mut token_starts = match VEC_LEN {
-                16 => token_starts & 0xffff,
-                32 => token_starts & 0xffff_ffff,
-                64 => token_starts,
-                _ => unreachable!(),
-            };
-
-            while token_starts != 0 {
-                let tz = (token_starts.trailing_zeros() as usize).min(VEC_LEN);
+            while chunk.token_starts != 0 {
+                let tz = (chunk.token_starts.trailing_zeros() as usize).min(VEC_LEN);
                 let token_start_ptr = src_ptr.add(tz);
                 let token_start_pos = token_start_ptr.offset_from_unsigned(src_start) as u32;
                 let bytes = token_start_ptr.cast::<[u8; 4]>().read();
-                token_starts &= !token_starts.isolate_lowest_one();
+                chunk.token_starts &= !chunk.token_starts.isolate_lowest_one();
 
                 let kind = match bytes {
                     [b'/', b'/', ..] => {
-                        let newlines = chunk.newlines & token_starts;
+                        let newlines = chunk.newlines & chunk.token_starts;
+                        if newlines != 0 {
+                            let lowest_one = newlines.isolate_lowest_one();
+                            chunk.token_starts &= !(lowest_one - 1);
+                        } else {
+                            loop {
+                                src_ptr = src_ptr.add(VEC_LEN);
+                                if src_ptr >= real_src_end {
+                                    src_ptr = real_src_end;
+                                    break;
+                                }
+                                let vec = load::<VEC_LEN>(src_ptr);
+                                carry = Carry::default();
+                                chunk = get_chunk(vec, &mut carry);
 
-                        if newlines == 0 {
-                            let mut token_end_ptr = token_start_ptr.add(2);
-                            while token_end_ptr.read() != b'\n' && token_end_ptr.read() != EOF_BYTE
-                            {
-                                token_end_ptr = token_end_ptr.add(1);
+                                if chunk.newlines != 0 {
+                                    let lowest_one = chunk.newlines.isolate_lowest_one();
+                                    chunk.token_starts &= !(lowest_one - 1);
+                                    chunk.token_starts |= lowest_one;
+                                    chunk.newlines &= !lowest_one;
+                                    break;
+                                }
                             }
-                            on_token(TokenKind::LineComment, token_start_pos);
-                            src_ptr = token_end_ptr;
-                            carry = Carry::default();
-                            continue 'outer;
                         }
-
-                        let lowest_one = newlines.isolate_lowest_one();
-                        token_starts &= !(lowest_one - 1);
-                        chunk.newlines &= !(lowest_one - 1);
-
                         TokenKind::LineComment
                     }
                     [b'/', b'*', ..] => {
@@ -514,16 +498,13 @@ pub fn lex<const VEC_LEN: usize>(padded_input: &[u8], mut on_token: impl FnMut(T
                         | b'@' | b'.' | b'!' | b'>' | b'<' | b'^'),
                         ..,
                     ] => TokenKind::from_u8(b).unwrap_unchecked(),
-                    [EOF_BYTE, ..] => TokenKind::Eof,
+                    [EOF_BYTE, ..] => break 'outer,
                     _ => TokenKind::Unknown,
                 };
                 on_token(kind, token_start_pos);
             }
 
             src_ptr = src_ptr.add(VEC_LEN);
-            if src_ptr >= real_src_end {
-                break 'outer;
-            }
         }
     }
     let eof_pos = padded_input.len() - VEC_LEN;
@@ -545,6 +526,7 @@ mod tests {
         let padded_input = prepare_input::<VEC_LEN>(input);
         let mut tokens = Vec::new();
         lex::<VEC_LEN>(&padded_input, |kind, pos| tokens.push((kind, pos)));
+        dbg!(&tokens);
 
         let mut actual = String::new();
         let mut iter = tokens.iter().copied();
@@ -557,21 +539,13 @@ mod tests {
             _ = writeln!(actual, "({kind:?}, {range:?}, «{lexeme}»)");
             kind = next_kind;
             start = next_start;
-
-            if start >= input.len() as u32 {
-                break;
-            }
         }
 
         expect.assert_eq(&actual);
     }
 
     #[test]
-    fn empty() {
-        check("", &expect![[r"
-            (Eof, 0..1, «�»)
-        "]]);
-    }
+    fn empty() { check("", &expect![[r""]]); }
 
     #[test]
     fn idents() {
