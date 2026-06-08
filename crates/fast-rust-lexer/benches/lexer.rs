@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::ptr;
 
-use criterion::{Criterion, Throughput};
+use criterion::{BatchSize, Criterion, Throughput};
 use fast_rust_lexer::utils::push_unchecked;
 use fast_rust_lexer::{multi_pass, multi_pass2, raw_ptr, simd};
 
@@ -419,19 +419,47 @@ fn multi_pass<W: multi_pass::Word, const VEC_LEN: usize>(c: &mut Criterion) {
 
 fn simd<const VEC_LEN: usize>(c: &mut Criterion) {
     let input = get_input();
-    let (input, mut output) = simd::prepare_input::<VEC_LEN>(&input);
+    let input = simd::prepare_input::<VEC_LEN>(&input);
 
-    let mut group = c.benchmark_group("simd");
-    group.throughput(Throughput::Bytes(input.len() as u64));
-
-    group.bench_function(format!("simd::<{VEC_LEN}>"), |b| {
-        b.iter(|| {
-            let output = simd::lex::<VEC_LEN>(&input, &mut output);
-            black_box(output);
+    {
+        let mut group = c.benchmark_group("simd::aos");
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(format!("simd::<{VEC_LEN}>"), |b| {
+            b.iter_batched_ref(
+                || Vec::with_capacity(input.len()),
+                |tokens| {
+                    simd::lex::<VEC_LEN>(&input, |kind, pos| unsafe {
+                        push_unchecked(tokens, (kind, pos));
+                    });
+                },
+                BatchSize::LargeInput,
+            );
         });
-    });
+        group.finish();
+    }
 
-    group.finish();
+    {
+        let mut group = c.benchmark_group("simd::soa");
+        group.throughput(Throughput::Bytes(input.len() as u64));
+        group.bench_function(format!("simd::<{VEC_LEN}>"), |b| {
+            b.iter_batched_ref(
+                || {
+                    (
+                        Vec::with_capacity(input.len()),
+                        Vec::with_capacity(input.len()),
+                    )
+                },
+                |(kinds, positions)| {
+                    simd::lex::<VEC_LEN>(&input, |kind, pos| unsafe {
+                        push_unchecked(kinds, kind);
+                        push_unchecked(positions, pos);
+                    });
+                },
+                BatchSize::LargeInput,
+            );
+        });
+        group.finish();
+    }
 }
 
 fn multi_pass2<const VEC_LEN: usize>(c: &mut Criterion) {

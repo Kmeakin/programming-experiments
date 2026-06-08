@@ -50,8 +50,9 @@ fn lex_raw_ptr<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
 }
 
 fn lex_simd<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
-    let (padded_input, mut token_vec) = simd::prepare_input::<VEC_LEN>(input);
-    let tokens = simd::lex::<VEC_LEN>(&padded_input, &mut token_vec) as &[_];
+    let padded_input = simd::prepare_input::<VEC_LEN>(input);
+    let mut tokens = Vec::new();
+    simd::lex::<VEC_LEN>(&padded_input, |kind, pos| tokens.push((kind, pos)));
     let mut out = Vec::new();
 
     let mut iter = tokens.iter().copied();

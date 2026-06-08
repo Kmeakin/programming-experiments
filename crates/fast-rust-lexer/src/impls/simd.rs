@@ -10,7 +10,7 @@ use crate::utils::*;
 
 pub const EOF_BYTE: u8 = 0xff;
 
-pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> (Vec<u8>, Vec<(TokenKind, u32)>) {
+pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> Vec<u8> {
     unsafe {
         let size = src.len() + VEC_LEN;
         let layout = std::alloc::Layout::from_size_align(size, VEC_LEN).unwrap();
@@ -21,9 +21,7 @@ pub fn prepare_input<const VEC_LEN: usize>(src: &str) -> (Vec<u8>, Vec<(TokenKin
         padded_input.extend([EOF_BYTE; VEC_LEN]);
         assert!(padded_input.as_ptr().is_aligned_to(VEC_LEN));
 
-        let eof_pos = src.len() as u32;
-        let output_vec = vec![(TokenKind::Eof, eof_pos); padded_input.len()];
-        (padded_input, output_vec)
+        padded_input
     }
 }
 
@@ -112,45 +110,15 @@ fn get_chunk<const VEC_LEN: usize>(vec: Simd<u8, VEC_LEN>, carry: &mut Carry) ->
     }
 }
 
-pub fn lex_16<'out>(
-    padded_input: &[u8],
-    output: &'out mut Vec<(TokenKind, u32)>,
-) -> &'out mut [(TokenKind, u32)] {
-    lex::<16>(padded_input, output)
-}
-
-pub fn lex_32<'out>(
-    padded_input: &[u8],
-    output: &'out mut Vec<(TokenKind, u32)>,
-) -> &'out mut [(TokenKind, u32)] {
-    lex::<32>(padded_input, output)
-}
-
-pub fn lex_64<'out>(
-    padded_input: &[u8],
-    output: &'out mut Vec<(TokenKind, u32)>,
-) -> &'out mut [(TokenKind, u32)] {
-    lex::<64>(padded_input, output)
-}
-
-pub fn lex<'out, const VEC_LEN: usize>(
-    padded_input: &[u8],
-    output: &'out mut Vec<(TokenKind, u32)>,
-) -> &'out mut [(TokenKind, u32)] {
+pub fn lex<const VEC_LEN: usize>(padded_input: &[u8], mut on_token: impl FnMut(TokenKind, u32)) {
     unsafe {
-        debug_assert!(output.len() >= padded_input.len());
         debug_assert!(padded_input.ends_with(&[EOF_BYTE; VEC_LEN]));
 
         let src_start = padded_input.as_ptr();
         let padded_src_end = padded_input.as_ptr_range().end;
         let real_src_end = padded_src_end.sub(VEC_LEN);
 
-        let out_start = output.as_mut_ptr();
-        let out_end = output.as_mut_ptr_range().end;
-
         let mut src_ptr = src_start;
-        let mut out_ptr = out_start;
-
         let mut carry = Carry::default();
 
         'outer: loop {
@@ -181,10 +149,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                             {
                                 token_end_ptr = token_end_ptr.add(1);
                             }
-                            out_ptr = write_and_advance(
-                                out_ptr,
-                                (TokenKind::LineComment, token_start_pos),
-                            );
+                            on_token(TokenKind::LineComment, token_start_pos);
                             src_ptr = token_end_ptr;
                             carry = Carry::default();
                             continue 'outer;
@@ -216,8 +181,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 _ => token_end_ptr = token_end_ptr.add(1),
                             }
                         }
-                        out_ptr =
-                            write_and_advance(out_ptr, (TokenKind::BlockComment, token_start_pos));
+                        on_token(TokenKind::BlockComment, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -234,7 +198,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 _ => token_end_ptr = token_end_ptr.add(1),
                             }
                         };
-                        out_ptr = write_and_advance(out_ptr, (TokenKind::Str, token_start_pos));
+                        on_token(TokenKind::Str, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -250,7 +214,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 _ => token_end_ptr = token_end_ptr.add(1),
                             }
                         };
-                        out_ptr = write_and_advance(out_ptr, (TokenKind::ByteStr, token_start_pos));
+                        on_token(TokenKind::ByteStr, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -266,7 +230,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 _ => token_end_ptr = token_end_ptr.add(1),
                             }
                         };
-                        out_ptr = write_and_advance(out_ptr, (TokenKind::CStr, token_start_pos));
+                        on_token(TokenKind::CStr, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -284,7 +248,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 _ => token_end_ptr = token_end_ptr.add(1),
                             }
                         }
-                        out_ptr = write_and_advance(out_ptr, (TokenKind::RawStr, token_start_pos));
+                        on_token(TokenKind::RawStr, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -301,8 +265,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 _ => token_end_ptr = token_end_ptr.add(1),
                             }
                         }
-                        out_ptr =
-                            write_and_advance(out_ptr, (TokenKind::RawByteStr, token_start_pos));
+                        on_token(TokenKind::RawByteStr, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -319,7 +282,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 _ => token_end_ptr = token_end_ptr.add(1),
                             }
                         }
-                        out_ptr = write_and_advance(out_ptr, (TokenKind::RawCStr, token_start_pos));
+                        on_token(TokenKind::RawCStr, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -332,8 +295,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                         {
                             token_end_ptr = token_end_ptr.add(1);
                         }
-                        out_ptr =
-                            write_and_advance(out_ptr, (TokenKind::RawIdent, token_start_pos));
+                        on_token(TokenKind::RawIdent, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -366,7 +328,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 }
                             }
                         }
-                        out_ptr = write_and_advance(out_ptr, (TokenKind::RawStr, token_start_pos));
+                        on_token(TokenKind::RawStr, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -399,8 +361,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 }
                             }
                         }
-                        out_ptr =
-                            write_and_advance(out_ptr, (TokenKind::RawByteStr, token_start_pos));
+                        on_token(TokenKind::RawByteStr, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -433,7 +394,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 }
                             }
                         }
-                        out_ptr = write_and_advance(out_ptr, (TokenKind::RawCStr, token_start_pos));
+                        on_token(TokenKind::RawCStr, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -448,19 +409,13 @@ pub fn lex<'out, const VEC_LEN: usize>(
                                 }
                                 b'\'' => {
                                     token_end_ptr = token_end_ptr.add(1);
-                                    out_ptr = write_and_advance(
-                                        out_ptr,
-                                        (TokenKind::Char, token_start_pos),
-                                    );
+                                    on_token(TokenKind::Char, token_start_pos);
                                     src_ptr = token_end_ptr;
                                     carry = Carry::default();
                                     continue 'outer;
                                 }
                                 _ => {
-                                    out_ptr = write_and_advance(
-                                        out_ptr,
-                                        (TokenKind::Lifetime, token_start_pos),
-                                    );
+                                    on_token(TokenKind::Lifetime, token_start_pos);
                                     src_ptr = token_end_ptr;
                                     carry = Carry::default();
                                     continue 'outer;
@@ -480,7 +435,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                             }
                         };
 
-                        out_ptr = write_and_advance(out_ptr, (TokenKind::Char, token_start_pos));
+                        on_token(TokenKind::Char, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -500,7 +455,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                             }
                         }
 
-                        out_ptr = write_and_advance(out_ptr, (TokenKind::Byte, token_start_pos));
+                        on_token(TokenKind::Byte, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -514,8 +469,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                         let mut kind;
                         match token_end_ptr.cast::<[u8; 2]>().read() {
                             [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_'] => {
-                                out_ptr =
-                                    write_and_advance(out_ptr, (TokenKind::Int, token_start_pos));
+                                on_token(TokenKind::Int, token_start_pos);
                                 src_ptr = token_end_ptr;
                                 carry = Carry::default();
                                 continue 'outer;
@@ -545,7 +499,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                             token_end_ptr = token_end_ptr.add(1);
                         }
 
-                        out_ptr = write_and_advance(out_ptr, (kind, token_start_pos));
+                        on_token(kind, token_start_pos);
                         src_ptr = token_end_ptr;
                         carry = Carry::default();
                         continue 'outer;
@@ -563,8 +517,7 @@ pub fn lex<'out, const VEC_LEN: usize>(
                     [EOF_BYTE, ..] => TokenKind::Eof,
                     _ => TokenKind::Unknown,
                 };
-                debug_assert!(out_ptr < out_end);
-                out_ptr = write_and_advance(out_ptr, (kind, token_start_pos));
+                on_token(kind, token_start_pos);
             }
 
             src_ptr = src_ptr.add(VEC_LEN);
@@ -573,8 +526,8 @@ pub fn lex<'out, const VEC_LEN: usize>(
             }
         }
     }
-
-    output
+    let eof_pos = padded_input.len() - VEC_LEN;
+    on_token(TokenKind::Eof, eof_pos as u32);
 }
 
 #[cfg(test)]
@@ -589,8 +542,9 @@ mod tests {
     fn check(input: &str, expect: &Expect) {
         use std::fmt::Write;
 
-        let (padded_input, mut token_vec) = prepare_input::<VEC_LEN>(input);
-        let tokens = lex::<VEC_LEN>(&padded_input, &mut token_vec) as &[_];
+        let padded_input = prepare_input::<VEC_LEN>(input);
+        let mut tokens = Vec::new();
+        lex::<VEC_LEN>(&padded_input, |kind, pos| tokens.push((kind, pos)));
 
         let mut actual = String::new();
         let mut iter = tokens.iter().copied();
