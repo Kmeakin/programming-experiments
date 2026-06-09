@@ -245,20 +245,31 @@ pub fn lex<const VEC_LEN: usize>(
                         continue 'outer;
                     }
                     TokenKind::RawIdent => {
-                        let mut token_end = token_start.add(2);
-                        while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = token_end.read()
-                        {
-                            token_end = token_end.add(1);
+                        // skip '#'
+                        chunk.tokens &= !chunk.tokens.isolate_lowest_one();
+                        while chunk.tokens == 0 {
+                            chunk_ptr = chunk_ptr.add(VEC_LEN);
+                            let vec = load::<VEC_LEN>(chunk_ptr);
+                            (chunk, carry) = get_chunk(vec, carry);
                         }
+
+                        // skip to end of ident
+                        chunk.tokens &= !chunk.tokens.isolate_lowest_one();
+                        while chunk.tokens == 0 {
+                            chunk_ptr = chunk_ptr.add(VEC_LEN);
+                            let vec = load::<VEC_LEN>(chunk_ptr);
+                            (chunk, carry) = get_chunk(vec, carry);
+                        }
+
+                        let tz = (chunk.tokens.trailing_zeros() as usize).min(VEC_LEN);
+                        let token_end = chunk_ptr.add(tz);
 
                         on_token(token_kind, token_start, token_end);
                         token_start = token_end;
-                        chunk_ptr = token_start;
-                        carry = Carry::default();
+                        chunk.tokens &= !chunk.tokens.isolate_lowest_one();
 
                         let lookahead = token_start.cast::<[u8; 4]>().read();
                         token_kind = get_kind(lookahead);
-                        continue 'outer;
                     }
                     TokenKind::Int => {
                         let mut token_end = token_start.add(1);
