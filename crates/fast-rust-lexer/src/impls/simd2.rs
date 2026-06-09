@@ -177,26 +177,40 @@ pub fn lex<const VEC_LEN: usize>(
                         continue 'outer;
                     }
                     TokenKind::RawStr | TokenKind::RawByteStr | TokenKind::RawCStr => {
-                        let mut token_end = token_start.add(2).add(usize::from(matches!(
-                            token_kind,
-                            TokenKind::RawByteStr | TokenKind::RawCStr
-                        )));
-                        let token_end = loop {
-                            match token_end.read() {
-                                b'"' => break token_end.add(1),
-                                EOF_BYTE => break token_end,
-                                _ => token_end = token_end.add(1),
-                            }
-                        };
+                        // skip "[b|c]r"
+                        chunk.tokens &= !chunk.tokens.isolate_lowest_one();
+                        chunk.quotes &= chunk.tokens;
+                        while chunk.quotes == 0 {
+                            chunk_ptr = chunk_ptr.add(VEC_LEN);
+                            let vec = load::<VEC_LEN>(chunk_ptr);
+                            (chunk, carry) = get_chunk(vec, Carry::default());
+                        }
 
-                        on_token(token_kind, token_start, token_end);
-                        token_start = token_end;
-                        chunk_ptr = token_start;
-                        carry = Carry::default();
+                        {
+                            let lowest_one = chunk.quotes.isolate_lowest_one();
+                            chunk.tokens &= !(lowest_one.wrapping_sub(1));
+                            chunk.quotes &= !lowest_one;
+                            chunk.tokens &= !lowest_one;
+                        }
 
-                        let lookahead = token_start.cast::<[u8; 4]>().read();
-                        token_kind = get_kind(lookahead);
-                        continue 'outer;
+                        if chunk.tokens == 0 {
+                            chunk_ptr = chunk_ptr.add(VEC_LEN);
+                            let vec = load::<VEC_LEN>(chunk_ptr);
+                            (chunk, carry) = get_chunk(vec, carry);
+                        }
+
+                        {
+                            let tz = (chunk.tokens.trailing_zeros() as usize).min(VEC_LEN);
+                            let token_end = chunk_ptr.add(tz);
+
+                            on_token(token_kind, token_start, token_end);
+
+                            token_start = token_end;
+                            chunk.tokens &= !chunk.tokens.isolate_lowest_one();
+
+                            let lookahead = token_start.cast::<[u8; 4]>().read();
+                            token_kind = get_kind(lookahead);
+                        }
                     }
                     TokenKind::HashStr | TokenKind::HashByteStr | TokenKind::HashCStr => {
                         let mut token_end = token_start.add(2).add(usize::from(matches!(
@@ -403,6 +417,7 @@ fn get_kind(lookahead: [u8; 4]) -> TokenKind {
 #[derive(Default)]
 struct Chunk<const VEC_LEN: usize> {
     newlines: u64,
+    quotes:   u64,
     tokens:   u64,
 }
 
@@ -441,6 +456,7 @@ fn get_chunk<const VEC_LEN: usize>(
     let eof_start = eof_chars.isolate_lowest_one();
 
     let newlines = movemask(eq(vec, b'\n')) | eof_start;
+    let quotes = movemask(eq(vec, b'\"')) | eof_start;
     let ws_chars = movemask(eq(vec, b' ') | in_range(vec, 0x09, 0x0C));
     let id_chars = movemask(
         eq(vec, b'_')
@@ -466,7 +482,11 @@ fn get_chunk<const VEC_LEN: usize>(
     };
 
     carry.start_of_file = 0;
-    let chunk = Chunk { newlines, tokens };
+    let chunk = Chunk {
+        newlines,
+        quotes,
+        tokens,
+    };
     (chunk, carry)
 }
 
