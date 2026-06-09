@@ -3,7 +3,7 @@ use std::ptr;
 
 use criterion::{BatchSize, Criterion, Throughput};
 use fast_rust_lexer::utils::push_unchecked;
-use fast_rust_lexer::{multi_pass, multi_pass2, raw_ptr, simd};
+use fast_rust_lexer::{multi_pass, multi_pass2, raw_ptr, simd, simd2};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -462,6 +462,29 @@ fn simd<const VEC_LEN: usize>(c: &mut Criterion) {
     }
 }
 
+fn simd2<const VEC_LEN: usize>(c: &mut Criterion) {
+    let input = get_input();
+    let padded_input = simd::prepare_input::<VEC_LEN>(&input);
+
+    let mut group = c.benchmark_group("simd2::soa");
+    group.throughput(Throughput::Bytes(input.len() as u64));
+    group.bench_function(format!("simd2::<{VEC_LEN}>"), |b| {
+        b.iter_batched_ref(
+            || {
+                (
+                    Vec::with_capacity(input.len()),
+                    Vec::with_capacity(input.len()),
+                )
+            },
+            |(kinds, ends)| {
+                simd2::lex_into_soa::<VEC_LEN>(&padded_input, kinds, ends);
+            },
+            BatchSize::LargeInput,
+        );
+    });
+    group.finish();
+}
+
 fn multi_pass2<const VEC_LEN: usize>(c: &mut Criterion) {
     let input = get_input();
     let (input, mut output) = multi_pass2::prepare_input::<VEC_LEN>(&input);
@@ -507,6 +530,10 @@ fn main() {
     simd::<16>(&mut criterion);
     simd::<32>(&mut criterion);
     simd::<64>(&mut criterion);
+
+    simd2::<16>(&mut criterion);
+    simd2::<32>(&mut criterion);
+    simd2::<64>(&mut criterion);
 
     multi_pass2::<16>(&mut criterion);
     multi_pass2::<32>(&mut criterion);
