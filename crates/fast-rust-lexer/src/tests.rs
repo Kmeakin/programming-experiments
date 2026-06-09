@@ -1,6 +1,6 @@
 use std::bstr::ByteStr;
 
-use crate::{TokenKind, multi_pass, raw_ptr, simd};
+use crate::{TokenKind, multi_pass, raw_ptr, simd, simd2};
 
 const CRATE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -70,6 +70,15 @@ fn lex_simd<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
     }
 
     out
+}
+
+fn lex_simd2<const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
+    let padded_input = simd::prepare_input::<VEC_LEN>(input);
+    let mut tokens = Vec::new();
+    simd2::lex::<VEC_LEN>(&padded_input, |kind, start, end| unsafe {
+        tokens.push((kind, end.offset_from_unsigned(start) as u32));
+    });
+    tokens
 }
 
 fn lex_multi_pass<W: multi_pass::Word, const VEC_LEN: usize>(input: &str) -> Vec<(TokenKind, u32)> {
@@ -160,6 +169,15 @@ fn test_simd_32() { check(lex_simd::<32>); }
 
 #[test]
 fn test_simd_64() { check(lex_simd::<64>); }
+
+#[test]
+fn test_simd2_16() { check(lex_simd2::<16>); }
+
+#[test]
+fn test_simd2_32() { check(lex_simd2::<32>); }
+
+#[test]
+fn test_simd2_64() { check(lex_simd2::<64>); }
 
 #[test]
 fn test_multi_pass_16() { check(lex_multi_pass::<u16, 16>); }

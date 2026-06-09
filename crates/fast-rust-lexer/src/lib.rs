@@ -74,6 +74,11 @@ pub enum TokenKind {
     RawCStr,
     ByteStr,
     RawByteStr,
+
+    HashStr,
+    HashByteStr,
+    HashCStr,
+
     GuardedStr,
 
     Char,

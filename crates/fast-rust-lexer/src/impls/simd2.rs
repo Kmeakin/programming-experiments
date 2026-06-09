@@ -69,6 +69,7 @@ pub fn lex<const VEC_LEN: usize>(
                         }
                         let lowest_one = chunk.newlines.isolate_lowest_one();
                         chunk.tokens &= !(lowest_one.wrapping_sub(1));
+                        chunk.tokens |= lowest_one;
                         chunk.newlines &= !lowest_one;
                     }
                     TokenKind::BlockComment => {
@@ -100,6 +101,204 @@ pub fn lex<const VEC_LEN: usize>(
                         token_kind = get_kind(lookahead);
                         continue 'outer;
                     }
+                    TokenKind::Str | TokenKind::ByteStr | TokenKind::CStr => {
+                        let mut token_end = token_start.add(1).add(usize::from(matches!(
+                            token_kind,
+                            TokenKind::ByteStr | TokenKind::CStr
+                        )));
+                        let token_end = loop {
+                            match token_end.read() {
+                                b'\\' => token_end = token_end.add(2),
+                                b'"' => break token_end.add(1),
+                                EOF_BYTE => break token_end,
+                                _ => token_end = token_end.add(1),
+                            }
+                        };
+
+                        on_token(token_kind, token_start, token_end);
+                        token_start = token_end;
+                        chunk_ptr = token_start;
+                        carry = Carry::default();
+
+                        let lookahead = token_start.cast::<[u8; 4]>().read();
+                        token_kind = get_kind(lookahead);
+                        continue 'outer;
+                    }
+                    TokenKind::Lifetime => {
+                        let mut token_end = token_start.add(1);
+                        while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = token_end.read()
+                        {
+                            token_end = token_end.add(1);
+                        }
+                        (token_end, token_kind) = match token_end.read() {
+                            b'\'' => (token_end.add(1), TokenKind::Char),
+                            _ => (token_end, TokenKind::Lifetime),
+                        };
+
+                        on_token(token_kind, token_start, token_end);
+                        token_start = token_end;
+                        chunk_ptr = token_start;
+                        carry = Carry::default();
+
+                        let lookahead = token_start.cast::<[u8; 4]>().read();
+                        token_kind = get_kind(lookahead);
+                        continue 'outer;
+                    }
+                    TokenKind::Char | TokenKind::Byte => {
+                        let mut token_end = token_start
+                            .add(1)
+                            .add(usize::from(matches!(token_kind, TokenKind::Byte)));
+                        let token_end = loop {
+                            match token_end.read() {
+                                b'\\' => token_end = token_end.add(2),
+                                b'\'' => break token_end.add(1),
+                                EOF_BYTE => break token_end,
+                                _ => token_end = token_end.add(1),
+                            }
+                        };
+
+                        on_token(token_kind, token_start, token_end);
+                        token_start = token_end;
+                        chunk_ptr = token_start;
+                        carry = Carry::default();
+
+                        let lookahead = token_start.cast::<[u8; 4]>().read();
+                        token_kind = get_kind(lookahead);
+                        continue 'outer;
+                    }
+                    TokenKind::RawStr | TokenKind::RawByteStr | TokenKind::RawCStr => {
+                        let mut token_end = token_start.add(2).add(usize::from(matches!(
+                            token_kind,
+                            TokenKind::RawByteStr | TokenKind::RawCStr
+                        )));
+                        let token_end = loop {
+                            match token_end.read() {
+                                b'"' => break token_end.add(1),
+                                EOF_BYTE => break token_end,
+                                _ => token_end = token_end.add(1),
+                            }
+                        };
+
+                        on_token(token_kind, token_start, token_end);
+                        token_start = token_end;
+                        chunk_ptr = token_start;
+                        carry = Carry::default();
+
+                        let lookahead = token_start.cast::<[u8; 4]>().read();
+                        token_kind = get_kind(lookahead);
+                        continue 'outer;
+                    }
+                    TokenKind::HashStr | TokenKind::HashByteStr | TokenKind::HashCStr => {
+                        let mut token_end = token_start.add(2).add(usize::from(matches!(
+                            token_kind,
+                            TokenKind::HashByteStr | TokenKind::HashCStr
+                        )));
+                        token_kind = match token_kind {
+                            TokenKind::HashStr => TokenKind::RawStr,
+                            TokenKind::HashByteStr => TokenKind::RawByteStr,
+                            TokenKind::HashCStr => TokenKind::RawCStr,
+                            _ => token_kind,
+                        };
+                        let mut hash_count = 1u32;
+                        while token_end.read() == b'#' {
+                            hash_count += 1;
+                            token_end = token_end.add(1);
+                        }
+                        if token_end.read() == b'"' {
+                            token_end = token_end.add(1);
+                            token_end = 'raw_str: loop {
+                                match token_end.read() {
+                                    b'"' => {
+                                        token_end = token_end.add(1);
+                                        let mut hash_count = hash_count;
+                                        while token_end.read() == b'#' {
+                                            token_end = token_end.add(1);
+                                            hash_count -= 1;
+                                            if hash_count == 0 {
+                                                break 'raw_str token_end;
+                                            }
+                                        }
+                                    }
+                                    EOF_BYTE => break token_end,
+                                    _ => token_end = token_end.add(1),
+                                }
+                            };
+                        }
+
+                        on_token(token_kind, token_start, token_end);
+                        token_start = token_end;
+                        chunk_ptr = token_start;
+                        carry = Carry::default();
+
+                        let lookahead = token_start.cast::<[u8; 4]>().read();
+                        token_kind = get_kind(lookahead);
+                        continue 'outer;
+                    }
+                    TokenKind::RawIdent => {
+                        let mut token_end = token_start.add(2);
+                        while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = token_end.read()
+                        {
+                            token_end = token_end.add(1);
+                        }
+
+                        on_token(token_kind, token_start, token_end);
+                        token_start = token_end;
+                        chunk_ptr = token_start;
+                        carry = Carry::default();
+
+                        let lookahead = token_start.cast::<[u8; 4]>().read();
+                        token_kind = get_kind(lookahead);
+                        continue 'outer;
+                    }
+                    TokenKind::Int => {
+                        let mut token_end = token_start.add(1);
+                        while let b'0'..=b'9' | b'_' = token_end.read() {
+                            token_end = token_end.add(1);
+                        }
+                        match token_end.cast::<[u8; 2]>().read() {
+                            [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_'] => {
+                                on_token(token_kind, token_start, token_end);
+                                token_start = token_end;
+                                chunk_ptr = token_start;
+                                carry = Carry::default();
+
+                                let lookahead = token_start.cast::<[u8; 4]>().read();
+                                token_kind = get_kind(lookahead);
+                                continue 'outer;
+                            }
+                            [b'.', _] => {
+                                token_end = token_end.add(1);
+                                while let b'0'..=b'9' | b'_' = token_end.read() {
+                                    token_end = token_end.add(1);
+                                }
+                                token_kind = TokenKind::Float;
+                            }
+                            _ => token_kind = TokenKind::Int,
+                        }
+
+                        if let b'e' | b'E' = token_end.read() {
+                            token_end = token_end.add(1);
+                            token_kind = TokenKind::Float;
+
+                            if let b'+' | b'-' = token_end.read() {
+                                token_end = token_end.add(1);
+                            }
+                        }
+
+                        while let b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' = token_end.read()
+                        {
+                            token_end = token_end.add(1);
+                        }
+
+                        on_token(token_kind, token_start, token_end);
+                        token_start = token_end;
+                        chunk_ptr = token_start;
+                        carry = Carry::default();
+
+                        let lookahead = token_start.cast::<[u8; 4]>().read();
+                        token_kind = get_kind(lookahead);
+                        continue 'outer;
+                    }
                     _ => {}
                 }
 
@@ -120,6 +319,7 @@ pub fn lex<const VEC_LEN: usize>(
     }
 }
 
+#[inline(always)]
 fn get_kind(lookahead: [u8; 4]) -> TokenKind {
     match lookahead {
         [b'!', ..] => TokenKind::Bang,
@@ -152,11 +352,23 @@ fn get_kind(lookahead: [u8; 4]) -> TokenKind {
         [b'~', ..] => TokenKind::Tilde,
         [b'\\', ..] => TokenKind::Backslash,
         [b'`', ..] => TokenKind::Backquote,
+        [b'@', ..] => TokenKind::At,
 
         [b'"', ..] => TokenKind::Str,
         [b'b', b'"', ..] => TokenKind::ByteStr,
         [b'c', b'"', ..] => TokenKind::CStr,
 
+        [b'r', b'"', ..] => TokenKind::RawStr,
+        [b'b', b'r', b'"', ..] => TokenKind::RawByteStr,
+        [b'c', b'r', b'"', ..] => TokenKind::RawCStr,
+
+        [b'r', b'#', b'"' | b'#', ..] => TokenKind::HashStr,
+        [b'b', b'r', b'#', ..] => TokenKind::HashByteStr,
+        [b'c', b'r', b'#', ..] => TokenKind::HashCStr,
+
+        [b'r', b'#', ..] => TokenKind::RawIdent,
+
+        [b'\'', b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_', ..] => TokenKind::Lifetime,
         [b'\'', ..] => TokenKind::Char,
         [b'b', b'\'', ..] => TokenKind::Byte,
 
