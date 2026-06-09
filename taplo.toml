@@ -1,7 +1,7 @@
 [formatting]
 align_comments        = true
 align_entries         = true
-allowed_blank_lines   = 2
+allowed_blank_lines   = 1
 array_auto_collapse   = true
 array_auto_expand     = true
 array_trailing_comma  = true
