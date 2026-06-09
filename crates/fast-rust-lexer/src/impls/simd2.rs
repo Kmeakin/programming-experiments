@@ -40,10 +40,6 @@ pub fn lex<const VEC_LEN: usize>(
         .expect("Input must be padded with EOF bytes");
 
     unsafe {
-        if src.is_empty() {
-            return;
-        }
-
         let mut chunk_ptr = src.as_ptr_range().start;
         let src_end = src.as_ptr_range().end;
 
@@ -67,10 +63,24 @@ pub fn lex<const VEC_LEN: usize>(
                             let vec = load::<VEC_LEN>(chunk_ptr);
                             (chunk, carry) = get_chunk(vec, Carry::default());
                         }
-                        let lowest_one = chunk.newlines.isolate_lowest_one();
-                        chunk.tokens &= !(lowest_one.wrapping_sub(1));
-                        chunk.tokens |= lowest_one;
-                        chunk.newlines &= !lowest_one;
+                        {
+                            let lowest_one = chunk.newlines.isolate_lowest_one();
+                            chunk.tokens &= !(lowest_one.wrapping_sub(1));
+                            chunk.tokens |= lowest_one;
+                            chunk.newlines &= !lowest_one;
+                        }
+                        {
+                            let tz = (chunk.tokens.trailing_zeros() as usize).min(VEC_LEN);
+                            let token_end = chunk_ptr.add(tz);
+
+                            on_token(token_kind, token_start, token_end);
+
+                            token_start = token_end;
+                            chunk.tokens &= !chunk.tokens.isolate_lowest_one();
+
+                            let lookahead = token_start.cast::<[u8; 4]>().read();
+                            token_kind = get_kind(lookahead);
+                        }
                     }
                     TokenKind::BlockComment => {
                         let mut depth = 1u32;
@@ -299,19 +309,19 @@ pub fn lex<const VEC_LEN: usize>(
                         token_kind = get_kind(lookahead);
                         continue 'outer;
                     }
-                    _ => {}
+                    _ => {
+                        let tz = (chunk.tokens.trailing_zeros() as usize).min(VEC_LEN);
+                        let token_end = chunk_ptr.add(tz);
+
+                        on_token(token_kind, token_start, token_end);
+
+                        token_start = token_end;
+                        chunk.tokens &= !chunk.tokens.isolate_lowest_one();
+
+                        let lookahead = token_start.cast::<[u8; 4]>().read();
+                        token_kind = get_kind(lookahead);
+                    }
                 }
-
-                let tz = (chunk.tokens.trailing_zeros() as usize).min(VEC_LEN);
-                let token_end = chunk_ptr.add(tz);
-
-                on_token(token_kind, token_start, token_end);
-
-                token_start = token_end;
-                chunk.tokens &= !chunk.tokens.isolate_lowest_one();
-
-                let lookahead = token_start.cast::<[u8; 4]>().read();
-                token_kind = get_kind(lookahead);
             }
 
             chunk_ptr = chunk_ptr.add(VEC_LEN);
