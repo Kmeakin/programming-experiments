@@ -54,7 +54,7 @@ pub fn lex<const VEC_LEN: usize>(
         let lookahead = token_start.cast::<[u8; 4]>().read();
         let mut token_kind = get_kind(lookahead);
 
-        while chunk_ptr < src_end {
+        'outer: while chunk_ptr < src_end {
             let vec = load::<VEC_LEN>(chunk_ptr);
             (chunk, carry) = get_chunk(vec, carry);
 
@@ -71,8 +71,36 @@ pub fn lex<const VEC_LEN: usize>(
                         chunk.tokens &= !(lowest_one.wrapping_sub(1));
                         chunk.newlines &= !lowest_one;
                     }
-                    TokenKind::BlockComment => todo!(),
-                    _ => (),
+                    TokenKind::BlockComment => {
+                        let mut depth = 1u32;
+                        let mut token_end = token_start.add(2);
+                        loop {
+                            match token_end.cast::<[u8; 2]>().read() {
+                                [b'/', b'*'] => {
+                                    depth += 1;
+                                    token_end = token_end.add(2);
+                                }
+                                [b'*', b'/'] => {
+                                    depth -= 1;
+                                    token_end = token_end.add(2);
+                                    if depth == 0 {
+                                        break;
+                                    }
+                                }
+                                [EOF_BYTE, ..] => break,
+                                _ => token_end = token_end.add(1),
+                            }
+                        }
+                        on_token(token_kind, token_start, token_end);
+                        token_start = token_end;
+                        chunk_ptr = token_start;
+                        carry = Carry::default();
+
+                        let lookahead = token_start.cast::<[u8; 4]>().read();
+                        token_kind = get_kind(lookahead);
+                        continue 'outer;
+                    }
+                    _ => {}
                 }
 
                 let tz = (chunk.tokens.trailing_zeros() as usize).min(VEC_LEN);
@@ -124,6 +152,14 @@ fn get_kind(lookahead: [u8; 4]) -> TokenKind {
         [b'~', ..] => TokenKind::Tilde,
         [b'\\', ..] => TokenKind::Backslash,
         [b'`', ..] => TokenKind::Backquote,
+
+        [b'"', ..] => TokenKind::Str,
+        [b'b', b'"', ..] => TokenKind::ByteStr,
+        [b'c', b'"', ..] => TokenKind::CStr,
+
+        [b'\'', ..] => TokenKind::Char,
+        [b'b', b'\'', ..] => TokenKind::Byte,
+
         [b' ' | 0x09..=0x0C, ..] => TokenKind::Whitespace,
         [b'_' | b'a'..=b'z' | b'A'..=b'Z', ..] => TokenKind::Ident,
         [b'0'..=b'9', ..] => TokenKind::Int,
@@ -422,6 +458,40 @@ mod tests {
             (Whitespace, 30..31, «
             »)
             (Ident, 31..36, «hello»)
+        "]]);
+    }
+
+    #[test]
+    fn block_comments() {
+        check::<16>("/**/", &expect![[r"
+            (BlockComment, 0..4, «/**/»)
+        "]]);
+        check::<16>("/*foo*/", &expect![[r"
+            (BlockComment, 0..7, «/*foo*/»)
+        "]]);
+        check::<16>("/*foo*/", &expect![[r"
+            (BlockComment, 0..7, «/*foo*/»)
+        "]]);
+    }
+
+    #[test]
+    fn block_comments_unterminated() {
+        check::<16>("/* EOF", &expect![[r"
+            (BlockComment, 0..6, «/* EOF»)
+        "]]);
+        check::<16>("/*/ EOF", &expect![[r"
+            (BlockComment, 0..7, «/*/ EOF»)
+        "]]);
+        check::<16>("/*/*/ EOF", &expect![[r"
+            (BlockComment, 0..9, «/*/*/ EOF»)
+        "]]);
+        check::<16>("/*/**/ EOF", &expect![[r"
+            (BlockComment, 0..10, «/*/**/ EOF»)
+        "]]);
+        check::<16>("/*/**/*/ EOF", &expect![[r"
+            (BlockComment, 0..8, «/*/**/*/»)
+            (Whitespace, 8..9, « »)
+            (Ident, 9..12, «EOF»)
         "]]);
     }
 }
