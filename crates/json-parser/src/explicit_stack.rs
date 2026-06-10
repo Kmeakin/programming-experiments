@@ -1,5 +1,4 @@
-use crate::Json;
-use crate::Token;
+use crate::{Json, Token};
 
 pub enum State {
     ValueStart,

@@ -1,5 +1,4 @@
-use crate::Json;
-use crate::Token;
+use crate::{Json, Token};
 
 pub fn parse(tokens: &[Token]) -> Result<(Json, &[Token]), (&'static str, &[Token])> {
     let [token, tokens1 @ ..] = tokens else {

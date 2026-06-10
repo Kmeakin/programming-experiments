@@ -102,9 +102,8 @@ pub fn eval<'a>(expr: Expr<'a>, mut env: Vec<Value<'a>>) -> Value<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::Env;
-
     use super::*;
+    use crate::syntax::Env;
 
     #[track_caller]
     #[allow(clippy::needless_pass_by_value)]

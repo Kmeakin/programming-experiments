@@ -4,10 +4,10 @@
 extern crate test;
 
 use std::hint::black_box;
-use test::Bencher;
 
 use char_iterators::after::Chars;
 use char_iterators::corpora;
+use test::Bencher;
 
 mod chars_next {
     use super::*;
