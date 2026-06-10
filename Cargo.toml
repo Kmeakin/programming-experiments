@@ -9,8 +9,6 @@ clippy.pedantic            = { level = "warn", priority = -1 }
 rust.unused_qualifications = { level = "warn", priority = -1 }
 rustdoc.all                = { level = "warn", priority = -1 }
 
-rust.unsafe_op_in_unsafe_fn = { level = "allow" }
-
 clippy.cast_possible_truncation = { level = "allow" }
 clippy.cast_precision_loss      = { level = "allow" }
 clippy.missing_errors_doc       = { level = "allow" }
@@ -21,6 +19,7 @@ clippy.similar_names            = { level = "allow" }
 clippy.single_match_else        = { level = "allow" }
 clippy.too_many_lines           = { level = "allow" }
 clippy.type_complexity          = { level = "allow" }
+rust.unsafe_op_in_unsafe_fn     = { level = "allow" }
 
 [profile.dev]
 debug            = true
