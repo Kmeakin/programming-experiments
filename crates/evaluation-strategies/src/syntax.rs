@@ -2,9 +2,17 @@
 pub enum Expr<'expr> {
     Int(u32),
     Var(usize),
-    Fun { body: &'expr Self },
-    App { fun: &'expr Self, arg: &'expr Self },
-    Let { val: &'expr Self, body: &'expr Self },
+    Fun {
+        body: &'expr Self,
+    },
+    App {
+        fun: &'expr Self,
+        arg: &'expr Self,
+    },
+    Let {
+        val:  &'expr Self,
+        body: &'expr Self,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

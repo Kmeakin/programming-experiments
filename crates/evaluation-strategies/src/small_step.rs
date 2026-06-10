@@ -37,7 +37,7 @@ fn step<'a>(state: State<'a>, env: &mut Vec<Value<'a>>, stack: &mut Vec<Frame<'a
             Expr::Int(n) => State::Value(Value::Int(n)),
             Expr::Var(index) => State::Value(lookup(env, index).clone()),
             Expr::Fun { body } => State::Value(Value::Fun {
-                env: env.clone(),
+                env:  env.clone(),
                 body: *body,
             }),
             Expr::App { fun, arg } => {
@@ -124,7 +124,7 @@ mod tests {
         assert_eval(
             vec![],
             Expr::Let {
-                val: &Expr::Int(42),
+                val:  &Expr::Int(42),
                 body: &Expr::Var(0),
             },
             Value::Int(42),
@@ -137,7 +137,7 @@ mod tests {
                 body: &Expr::Var(0),
             },
             Value::Fun {
-                env: vec![],
+                env:  vec![],
                 body: Expr::Var(0),
             },
         );
@@ -175,7 +175,7 @@ mod tests {
         assert_eval(
             vec![],
             Expr::Let {
-                val: &Expr::Fun {
+                val:  &Expr::Fun {
                     body: &Expr::Var(0),
                 },
                 body: &Expr::App {

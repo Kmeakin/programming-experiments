@@ -14,8 +14,8 @@ enum KVPairFrame {
 }
 
 struct Cont<F> {
-    ret: F,
-    value: Vec<ValueFrame>,
+    ret:     F,
+    value:   Vec<ValueFrame>,
     kv_pair: Vec<KVPairFrame>,
 }
 
@@ -170,8 +170,8 @@ pub fn parse(tokens: &[Token]) -> Result<(Json, &[Token]), (&'static str, &[Toke
     value(
         tokens,
         &mut Cont {
-            ret: |value, tokens| Ok((value, tokens)),
-            value: vec![],
+            ret:     |value, tokens| Ok((value, tokens)),
+            value:   vec![],
             kv_pair: vec![],
         },
         Err,

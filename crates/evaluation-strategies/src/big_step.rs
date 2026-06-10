@@ -9,7 +9,7 @@ pub fn eval<'expr>(expr: &Expr<'expr>, env: &mut Env<'expr>) -> Value<'expr> {
         }
 
         Expr::Fun { body } => Value::Fun {
-            env: env.clone(),
+            env:  env.clone(),
             body: **body,
         },
         Expr::App { fun, arg } => {
@@ -61,7 +61,7 @@ mod tests {
         assert_eval(
             vec![],
             Expr::Let {
-                val: &Expr::Int(42),
+                val:  &Expr::Int(42),
                 body: &Expr::Var(0),
             },
             Value::Int(42),
@@ -74,7 +74,7 @@ mod tests {
                 body: &Expr::Var(0),
             },
             Value::Fun {
-                env: vec![],
+                env:  vec![],
                 body: Expr::Var(0),
             },
         );
@@ -95,7 +95,7 @@ mod tests {
         assert_eval(
             vec![],
             Expr::Let {
-                val: &Expr::Fun {
+                val:  &Expr::Fun {
                     body: &Expr::Var(0),
                 },
                 body: &Expr::App {
