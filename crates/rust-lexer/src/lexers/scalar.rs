@@ -1,3 +1,9 @@
+//! Changes WRT to `rustc`:
+//! * Iterates over bytes instead of Unicode chars
+//! * Eliminate bounds checks by padding the input with `EOF_BYTE` (0xFF, cannot
+//!   occur in valid UTF8).
+//! * FIXME: handle Unicode whitespace and identifiers
+
 #![allow(unsafe_op_in_unsafe_fn)]
 
 use std::time::Duration;
