@@ -3,7 +3,7 @@ use std::hint::assert_unchecked;
 /// Checks whether the byte is a UTF-8 continuation byte (i.e., starts with the
 /// bits `10`).
 #[inline]
-pub const fn utf8_is_cont_byte(byte: u8) -> bool { (byte as i8) < -64 }
+pub const fn utf8_is_cont_byte(byte: u8) -> bool { byte.cast_signed() < -64 }
 
 /// Reads the next code point out of a byte iterator (assuming a
 /// UTF-8-like encoding).
@@ -138,7 +138,7 @@ impl<'a> Chars<'a> {
     }
 }
 
-impl<'a> Iterator for Chars<'a> {
+impl Iterator for Chars<'_> {
     type Item = char;
 
     #[inline]
@@ -155,7 +155,7 @@ impl<'a> Iterator for Chars<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for Chars<'a> {
+impl DoubleEndedIterator for Chars<'_> {
     #[inline]
     fn next_back(&mut self) -> Option<char> {
         // SAFETY: `str` invariant says `self.iter` is a valid UTF-8 string and

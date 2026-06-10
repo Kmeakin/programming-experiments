@@ -66,6 +66,7 @@ fn array_loop<T: 'static>(
     }
 }
 
+#[allow(unused_variables)] // rust-analyzer has a false-positive
 fn kv_pair<T: 'static>(tokens: &[Token], k: Cont<(String, Json), T>) -> PResult<'_, T> {
     let (key, mut tokens) = match tokens {
         [Token::String(key), tokens1 @ ..] => (key.clone(), tokens1),
