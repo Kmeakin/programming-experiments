@@ -6,4 +6,4 @@ edition.workspace = true
 workspace = true
 
 [dev-dependencies]
-expect-test = "1.5.1"
+expect-test = { version = "1.5.1" }
