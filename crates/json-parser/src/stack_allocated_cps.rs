@@ -13,9 +13,9 @@ fn value<'tokens, T>(
     };
 
     match token {
-        Token::True => ok((Json::Bool(true), rest)),
-        Token::False => ok((Json::Bool(false), rest)),
-        Token::Null => ok((Json::Null, rest)),
+        Token::KwTrue => ok((Json::Bool(true), rest)),
+        Token::KwFalse => ok((Json::Bool(false), rest)),
+        Token::KwNull => ok((Json::Null, rest)),
         Token::Number => ok((Json::Number, rest)),
         Token::String(s) => ok((Json::String(s.clone()), rest)),
         Token::LSquare => match rest {
@@ -116,13 +116,13 @@ mod tests {
 
     #[test]
     fn test_parse_bool() {
-        assert_eq!(parse(&[Token::True]), Ok((Json::Bool(true), &[][..])));
-        assert_eq!(parse(&[Token::False]), Ok((Json::Bool(false), &[][..])));
+        assert_eq!(parse(&[Token::KwTrue]), Ok((Json::Bool(true), &[][..])));
+        assert_eq!(parse(&[Token::KwFalse]), Ok((Json::Bool(false), &[][..])));
     }
 
     #[test]
     fn test_parse_null() {
-        assert_eq!(parse(&[Token::Null]), Ok((Json::Null, &[][..])));
+        assert_eq!(parse(&[Token::KwNull]), Ok((Json::Null, &[][..])));
     }
 
     #[test]
@@ -136,15 +136,15 @@ mod tests {
     #[test]
     fn test_parse_array_with_elements() {
         assert_eq!(
-            parse(&[Token::LSquare, Token::True, Token::RSquare]),
+            parse(&[Token::LSquare, Token::KwTrue, Token::RSquare]),
             Ok((Json::Array(vec![Json::Bool(true)]), &[][..]))
         );
         assert_eq!(
             parse(&[
                 Token::LSquare,
-                Token::True,
+                Token::KwTrue,
                 Token::Comma,
-                Token::False,
+                Token::KwFalse,
                 Token::RSquare
             ]),
             Ok((
@@ -176,11 +176,11 @@ mod tests {
             Err(("unexpected EOF; unterminated `[`", &[][..]))
         );
         assert_eq!(
-            parse(&[Token::LSquare, Token::True]),
+            parse(&[Token::LSquare, Token::KwTrue]),
             Err(("unexpected EOF; expected `]` or `,`", &[][..]))
         );
         assert_eq!(
-            parse(&[Token::LSquare, Token::True, Token::Comma]),
+            parse(&[Token::LSquare, Token::KwTrue, Token::Comma]),
             Err(("unexpected EOF; expected JSON value", &[][..]))
         );
     }

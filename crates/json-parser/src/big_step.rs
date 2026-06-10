@@ -6,9 +6,9 @@ pub fn parse(tokens: &[Token]) -> Result<(Json, &[Token]), (&'static str, &[Toke
     };
 
     match token {
-        Token::True => Ok((Json::Bool(true), tokens1)),
-        Token::False => Ok((Json::Bool(false), tokens1)),
-        Token::Null => Ok((Json::Null, tokens1)),
+        Token::KwTrue => Ok((Json::Bool(true), tokens1)),
+        Token::KwFalse => Ok((Json::Bool(false), tokens1)),
+        Token::KwNull => Ok((Json::Null, tokens1)),
         Token::Number => Ok((Json::Number, tokens1)),
         Token::String(s) => Ok((Json::String(s.clone()), tokens1)),
         Token::LSquare => match tokens1 {
@@ -79,87 +79,65 @@ fn parse_kv_pair(tokens: &[Token]) -> Result<((String, Json), &[Token]), (&'stat
 
 #[cfg(test)]
 mod tests {
+    use super::Json::*;
+    use super::Token::*;
     use super::*;
 
     #[test]
     fn test_parse_bool() {
-        assert_eq!(parse(&[Token::True]), Ok((Json::Bool(true), &[][..])));
-        assert_eq!(parse(&[Token::False]), Ok((Json::Bool(false), &[][..])));
+        assert_eq!(parse(&[KwTrue]), Ok((Bool(true), &[][..])));
+        assert_eq!(parse(&[KwFalse]), Ok((Bool(false), &[][..])));
     }
 
     #[test]
     fn test_parse_null() {
-        assert_eq!(parse(&[Token::Null]), Ok((Json::Null, &[][..])));
+        assert_eq!(parse(&[KwNull]), Ok((Null, &[][..])));
     }
 
     #[test]
     fn test_parse_empty_array() {
-        assert_eq!(
-            parse(&[Token::LSquare, Token::RSquare]),
-            Ok((Json::Array(vec![]), &[][..]))
-        );
+        assert_eq!(parse(&[LSquare, RSquare]), Ok((Array(vec![]), &[][..])));
     }
 
     #[test]
     fn test_parse_array_with_elements() {
         assert_eq!(
-            parse(&[Token::LSquare, Token::True, Token::RSquare]),
-            Ok((Json::Array(vec![Json::Bool(true)]), &[][..]))
+            parse(&[LSquare, KwTrue, RSquare]),
+            Ok((Array(vec![Bool(true)]), &[][..]))
         );
         assert_eq!(
-            parse(&[
-                Token::LSquare,
-                Token::True,
-                Token::Comma,
-                Token::False,
-                Token::RSquare
-            ]),
-            Ok((
-                Json::Array(vec![Json::Bool(true), Json::Bool(false)]),
-                &[][..]
-            ))
+            parse(&[LSquare, KwTrue, Comma, KwFalse, RSquare]),
+            Ok((Array(vec![Bool(true), Bool(false)]), &[][..]))
         );
     }
 
     #[test]
     fn test_parse_empty_object() {
-        assert_eq!(
-            parse(&[Token::LCurly, Token::RCurly]),
-            Ok((Json::Object(vec![]), &[][..]))
-        );
+        assert_eq!(parse(&[LCurly, RCurly]), Ok((Object(vec![]), &[][..])));
     }
 
     #[test]
     fn test_parse_object_with_elements() {
         assert_eq!(
-            parse(&[
-                Token::LCurly,
-                Token::String("key1".into()),
-                Token::Colon,
-                Token::True,
-                Token::RCurly
-            ]),
-            Ok((
-                Json::Object(vec![("key1".into(), Json::Bool(true))]),
-                &[][..]
-            ))
+            parse(&[LCurly, Token::String("key1".into()), Colon, KwTrue, RCurly]),
+            Ok((Object(vec![("key1".into(), Bool(true))]), &[][..]))
         );
         assert_eq!(
             parse(&[
-                Token::LCurly,
+                LCurly,
                 Token::String("key1".into()),
-                Token::Colon,
-                Token::True,
-                Token::Comma,
+                Colon,
+                KwTrue,
+                Comma,
                 Token::String("key2".into()),
-                Token::Colon,
-                Token::False,
-                Token::RCurly
+                Colon,
+                KwFalse,
+                RCurly
             ]),
             Ok((
-                Json::Object(vec![
-                    ("key1".into(), Json::Bool(true)),
-                    ("key2".into(), Json::Bool(false))
+                Object(vec![
+                    ("key1".into(), Bool(true)),
+                    ("key2".into(), Bool(false))
                 ]),
                 &[][..]
             ))
@@ -173,57 +151,43 @@ mod tests {
             Err(("unexpected EOF; expected JSON value", &[][..]))
         );
         assert_eq!(
-            parse(&[Token::RSquare]),
-            Err((
-                "unexpected token; expected JSON value",
-                &[Token::RSquare][..]
-            ))
+            parse(&[RSquare]),
+            Err(("unexpected token; expected JSON value", &[RSquare][..]))
         );
         assert_eq!(
-            parse(&[Token::Comma]),
-            Err(("unexpected token; expected JSON value", &[Token::Comma][..]))
+            parse(&[Comma]),
+            Err(("unexpected token; expected JSON value", &[Comma][..]))
         );
         assert_eq!(
-            parse(&[Token::LSquare]),
+            parse(&[LSquare]),
             Err(("unexpected EOF; unterminated `[`", &[][..]))
         );
         assert_eq!(
-            parse(&[Token::LSquare, Token::True]),
+            parse(&[LSquare, KwTrue]),
             Err(("unexpected EOF; expected `]` or `,`", &[][..]))
         );
         assert_eq!(
-            parse(&[Token::LSquare, Token::True, Token::Comma]),
+            parse(&[LSquare, KwTrue, Comma]),
             Err(("unexpected EOF; expected JSON value", &[][..]))
         );
         assert_eq!(
-            parse(&[Token::LCurly]),
+            parse(&[LCurly]),
             Err(("unexpected EOF; unterminated `{`", &[][..]))
         );
         assert_eq!(
-            parse(&[Token::LCurly, Token::String("key1".into())]),
+            parse(&[LCurly, Token::String("key1".into())]),
             Err(("unexpected EOF; expected `:`", &[][..]))
         );
         assert_eq!(
-            parse(&[Token::LCurly, Token::String("key1".into()), Token::Colon]),
+            parse(&[LCurly, Token::String("key1".into()), Colon]),
             Err(("unexpected EOF; expected JSON value", &[][..]))
         );
         assert_eq!(
-            parse(&[
-                Token::LCurly,
-                Token::String("key1".into()),
-                Token::Colon,
-                Token::True
-            ]),
+            parse(&[LCurly, Token::String("key1".into()), Colon, KwTrue]),
             Err(("unexpected EOF; expected `}` or `,`", &[][..]))
         );
         assert_eq!(
-            parse(&[
-                Token::LCurly,
-                Token::String("key1".into()),
-                Token::Colon,
-                Token::True,
-                Token::Comma
-            ]),
+            parse(&[LCurly, Token::String("key1".into()), Colon, KwTrue, Comma]),
             Err(("unexpected EOF; expected string or `}`", &[][..]))
         );
     }

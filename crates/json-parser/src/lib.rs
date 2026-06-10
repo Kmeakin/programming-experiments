@@ -7,9 +7,9 @@ pub mod stack_allocated_cps;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
-    True,
-    False,
-    Null,
+    KwTrue,
+    KwFalse,
+    KwNull,
     Number,
     String(String),
 
@@ -57,15 +57,15 @@ pub fn lex(input: &str) -> Option<(Lexeme, &str)> {
         }
         b't' => match bytes0.strip_prefix(b"true") {
             None => (Lexeme::Error("unterminated `true`"), bytes1),
-            Some(rest) => (Lexeme::Token(Token::True), rest),
+            Some(rest) => (Lexeme::Token(Token::KwTrue), rest),
         },
         b'f' => match bytes0.strip_prefix(b"false") {
             None => (Lexeme::Error("unterminated `false`"), bytes1),
-            Some(rest) => (Lexeme::Token(Token::False), rest),
+            Some(rest) => (Lexeme::Token(Token::KwFalse), rest),
         },
         b'n' => match bytes0.strip_prefix(b"null") {
             None => (Lexeme::Error("unterminated `null`"), bytes1),
-            Some(rest) => (Lexeme::Token(Token::Null), rest),
+            Some(rest) => (Lexeme::Token(Token::KwNull), rest),
         },
         b'"' => {
             let mut bytes = bytes1;
@@ -95,6 +95,7 @@ pub fn lex(input: &str) -> Option<(Lexeme, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn test_lex_whitespace() {
         assert_eq!(lex("   \t\n  "), Some((Lexeme::Whitespace, "")));
@@ -103,9 +104,9 @@ mod tests {
 
     #[test]
     fn test_lex_keywords() {
-        assert_eq!(lex("true"), Some((Lexeme::Token(Token::True), "")));
-        assert_eq!(lex("false"), Some((Lexeme::Token(Token::False), "")));
-        assert_eq!(lex("null"), Some((Lexeme::Token(Token::Null), "")));
+        assert_eq!(lex("true"), Some((Lexeme::Token(Token::KwTrue), "")));
+        assert_eq!(lex("false"), Some((Lexeme::Token(Token::KwFalse), "")));
+        assert_eq!(lex("null"), Some((Lexeme::Token(Token::KwNull), "")));
     }
 
     #[test]
