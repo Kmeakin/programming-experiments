@@ -17,3 +17,10 @@ reorder_arrays        = false
 reorder_inline_tables = false
 reorder_keys          = true
 trailing_newline      = true
+
+[[rule]]
+include = ["**/Cargo.toml"]
+keys    = ["package"]
+
+[rule.formatting]
+reorder_keys = false

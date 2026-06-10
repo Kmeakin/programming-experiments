@@ -1,13 +1,9 @@
 [package]
-name    = "char-iterators"
-version = "0.1.0"
-
+name              = "char-iterators"
 edition.workspace = true
 
 [lints]
 workspace = true
-
-[dependencies]
 
 [[bench]]
 name = "before"

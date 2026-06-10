@@ -1,3 +1,6 @@
-lints.workspace           = true
-package.edition.workspace = true
-package.name              = "evaluation-strategies"
+[package]
+name              = "evaluation-strategies"
+edition.workspace = true
+
+[lints]
+workspace = true
