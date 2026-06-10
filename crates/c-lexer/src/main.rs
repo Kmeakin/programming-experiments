@@ -27,8 +27,8 @@ fn main() {
                 let elapsed = end_time - start_time;
                 let bytes = text.len();
                 let lines = text.lines().count();
-                let bytes_per_sec = bytes as f64 / elapsed.as_secs_f64() / 1E6;
-                let lines_per_sec = lines as f64 / elapsed.as_secs_f64() / 1E6;
+                let bytes_per_sec = bytes as f64 / elapsed.as_secs_f64() / 1.0E6;
+                let lines_per_sec = lines as f64 / elapsed.as_secs_f64() / 1.0E6;
                 println!(
                     "\
 {file}:
