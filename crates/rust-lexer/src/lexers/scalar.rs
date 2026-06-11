@@ -2,7 +2,8 @@
 //! * Iterates over bytes instead of Unicode chars
 //! * Eliminate bounds checks by padding the input with `EOF_BYTE` (0xFF, cannot
 //!   occur in valid UTF8).
-//! * Use `memchr` for finding the end of line comments and raw strings.
+//! * Use a LUT for character classification instead of branches.
+//! * Use `memchr` for finding the end of line comments and strings.
 //! * FIXME: handle Unicode whitespace and identifiers
 
 #![allow(unsafe_op_in_unsafe_fn)]
