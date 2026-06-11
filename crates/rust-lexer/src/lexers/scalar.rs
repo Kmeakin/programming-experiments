@@ -127,7 +127,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 }
 
                 [b'"', ..] => {
-                    let end = double_quote_string(token_start);
+                    let end = double_quote_string(token_start, src_end);
                     on_token(TokenKind::Str, token_start, end);
                     token_start = end;
                 }
@@ -161,7 +161,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                     token_start = end;
                 }
                 [b'b', b'"', ..] => {
-                    let end = double_quote_string(token_start.add(1));
+                    let end = double_quote_string(token_start.add(1), src_end);
                     on_token(TokenKind::BStr, token_start, end);
                     token_start = end;
                 }
@@ -177,7 +177,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 }
 
                 [b'c', b'"', ..] => {
-                    let end = double_quote_string(token_start.add(1));
+                    let end = double_quote_string(token_start.add(1), src_end);
                     on_token(TokenKind::CStr, token_start, end);
                     token_start = end;
                 }
@@ -297,17 +297,28 @@ unsafe fn single_quote_string(start: *const u8) -> *const u8 {
 }
 
 #[inline]
-unsafe fn double_quote_string(start: *const u8) -> *const u8 {
-    debug_assert_eq!(start.read(), b'\"');
-    let mut end = start.add(1);
-    loop {
-        match end.read() {
-            b'\\' => end = end.add(2),
-            b'\"' => return end.add(1),
-            EOF_BYTE => return end,
-            _ => end = end.add(1),
+unsafe fn double_quote_string(mut cursor: *const u8, src_end: *const u8) -> *const u8 {
+    debug_assert_eq!(cursor.read(), b'\"');
+    cursor = cursor.add(1);
+
+    let haystack = std::slice::from_ptr_range(cursor..src_end);
+    for pos in memchr::memchr_iter(b'"', haystack) {
+        let quote = haystack.as_ptr().add(pos);
+        debug_assert_eq!(quote.read(), b'\"');
+
+        let after_quote = quote.add(1);
+
+        let mut num_backslashes = 0usize;
+        let mut backslash_ptr = quote.sub(1);
+        while backslash_ptr.read() == b'\\' {
+            backslash_ptr = backslash_ptr.sub(1);
+            num_backslashes += 1;
+        }
+        if num_backslashes.is_multiple_of(2) {
+            return after_quote;
         }
     }
+    src_end
 }
 
 #[inline]
