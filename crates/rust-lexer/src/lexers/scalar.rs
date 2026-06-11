@@ -24,26 +24,47 @@ pub fn lex_soa(padded_src: &[u8], kinds: &mut Vec<TokenKind>, ends: &mut Vec<u32
     });
 }
 
+#[rustfmt::skip]
 const LUT: [u8; 256] = {
     let mut lut = [0; 256];
     let mut i = 0;
     while i < 256 {
-        lut[i] |= (matches!(i as u8, b' ' | 0x09..=0x0C) as u8); // whitespace
-        lut[i] |= (matches!(i as u8, b'_' | b'0'..=b'9') as u8) << 1; // digits
-        lut[i] |= (matches!(i as u8, b'_' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z') as u8) << 2; // idents
+        // whitespace
+        lut[i] |= (matches!(i as u8, | b' ' | 0x09..=0x0C) as u8);
+
+        // digits
+        lut[i] |= (matches!(i as u8, | b'_' | b'0'..=b'9') as u8) << 1;
+
+        // idents
+        lut[i] |= (matches!(i as u8, | b'_' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z') as u8) << 2;
+
+        // punctuation
+        lut[i] |= (matches!(i as u8, | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';'
+                                     | b':' | b'+' | b'-' | b'*' | b'%' | b'=' | b'&' | b'|'
+                                     | b'$' | b'?' | b'~' | b'#' | b'@' | b'.' | b'!' | b'>'
+                                     | b'<' | b'^') as u8) << 3; // punctuation
         i += 1;
     }
     lut
 };
 
 #[inline]
-const fn is_whitespace(byte: u8) -> bool { LUT[byte as usize] & 0b001 != 0 }
+const fn is_whitespace(byte: u8) -> bool { LUT[byte as usize] & (1 << 0) != 0 }
 
 #[inline]
-const fn is_digit(byte: u8) -> bool { LUT[byte as usize] & 0b010 != 0 }
+const fn is_digit(byte: u8) -> bool { LUT[byte as usize] & (1 << 1) != 0 }
 
 #[inline]
-const fn is_ident(byte: u8) -> bool { LUT[byte as usize] & 0b100 != 0 }
+const fn is_ident(byte: u8) -> bool { LUT[byte as usize] & (1 << 2) != 0 }
+
+#[inline]
+const fn is_punct(b: u8) -> Option<TokenKind> {
+    if LUT[b as usize] & (1 << 3) != 0 {
+        unsafe { Some(std::mem::transmute::<u8, TokenKind>(b)) }
+    } else {
+        None
+    }
+}
 
 pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
     let src = padded_src
@@ -54,43 +75,8 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
         let src_end = src.as_ptr_range().end;
         let mut token_start = src.as_ptr();
 
-        macro_rules! punct {
-            ($kind:ident) => {{
-                let token_end = token_start.add(1);
-                on_token(TokenKind::$kind, token_start, token_end);
-                token_start = token_end;
-            }};
-        }
-
         loop {
             match token_start.cast::<[u8; 4]>().read() {
-                [b'(', ..] => punct!(LParen),
-                [b')', ..] => punct!(RParen),
-                [b'[', ..] => punct!(LSquare),
-                [b']', ..] => punct!(RSquare),
-                [b'{', ..] => punct!(LCurly),
-                [b'}', ..] => punct!(RCurly),
-                [b',', ..] => punct!(Comma),
-                [b';', ..] => punct!(Semicolon),
-                [b':', ..] => punct!(Colon),
-                [b'+', ..] => punct!(Plus),
-                [b'-', ..] => punct!(Minus),
-                [b'*', ..] => punct!(Star),
-                [b'%', ..] => punct!(Percent),
-                [b'=', ..] => punct!(Eq),
-                [b'&', ..] => punct!(And),
-                [b'|', ..] => punct!(Or),
-                [b'$', ..] => punct!(Dollar),
-                [b'?', ..] => punct!(Question),
-                [b'~', ..] => punct!(Tilde),
-                [b'#', ..] => punct!(Hash),
-                [b'@', ..] => punct!(At),
-                [b'.', ..] => punct!(Dot),
-                [b'!', ..] => punct!(Bang),
-                [b'>', ..] => punct!(Gt),
-                [b'<', ..] => punct!(Lt),
-                [b'^', ..] => punct!(Caret),
-
                 [b'/', b'/', ..] => {
                     let token_end = memchr_raw(b'\n', token_start, src_end).unwrap_or(src_end);
                     on_token(TokenKind::LineComment, token_start, token_end);
@@ -119,7 +105,20 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                     on_token(TokenKind::BlockComment, token_start, end);
                     token_start = end;
                 }
-                [b'/', ..] => punct!(Slash),
+                #[rustfmt::skip]
+                [b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'+' | b'-'
+                      | b'*' | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@'
+                      | b'.' | b'!' | b'>' | b'<' | b'^', ..] => {
+                    while let Some(kind) = is_punct(token_start.read()) {
+                        on_token(kind, token_start, token_start.add(1));
+                        token_start = token_start.add(1);
+                    };
+                }
+                [b'/', ..] => {
+                    let token_end = token_start.add(1);
+                    on_token(TokenKind::Slash, token_start, token_end);
+                    token_start = token_end;
+                }
 
                 [b'"', ..] => {
                     let end = double_quote_string(token_start);
