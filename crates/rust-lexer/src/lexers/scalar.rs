@@ -35,14 +35,17 @@ const LUT: [u8; 256] = {
         // digits
         lut[i] |= (matches!(i as u8, | b'_' | b'0'..=b'9') as u8) << 1;
 
-        // idents
-        lut[i] |= (matches!(i as u8, | b'_' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z') as u8) << 2;
+        // ident starts
+        lut[i] |= (matches!(i as u8, | b'_' | b'a'..=b'z' | b'A'..=b'Z') as u8) << 2;
+
+        // ident conts
+        lut[i] |= (matches!(i as u8, | b'_' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z') as u8) << 3;
 
         // punctuation
         lut[i] |= (matches!(i as u8, | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';'
                                      | b':' | b'+' | b'-' | b'*' | b'%' | b'=' | b'&' | b'|'
                                      | b'$' | b'?' | b'~' | b'#' | b'@' | b'.' | b'!' | b'>'
-                                     | b'<' | b'^') as u8) << 3; // punctuation
+                                     | b'<' | b'^') as u8) << 4;
         i += 1;
     }
     lut
@@ -55,11 +58,14 @@ const fn is_whitespace(byte: u8) -> bool { LUT[byte as usize] & (1 << 0) != 0 }
 const fn is_digit(byte: u8) -> bool { LUT[byte as usize] & (1 << 1) != 0 }
 
 #[inline]
-const fn is_ident(byte: u8) -> bool { LUT[byte as usize] & (1 << 2) != 0 }
+const fn is_ident_start(byte: u8) -> bool { LUT[byte as usize] & (1 << 2) != 0 }
+
+#[inline]
+const fn is_ident_cont(byte: u8) -> bool { LUT[byte as usize] & (1 << 3) != 0 }
 
 #[inline]
 const fn is_punct(b: u8) -> Option<TokenKind> {
-    if LUT[b as usize] & (1 << 3) != 0 {
+    if LUT[b as usize] & (1 << 4) != 0 {
         unsafe { Some(std::mem::transmute::<u8, TokenKind>(b)) }
     } else {
         None
@@ -127,8 +133,8 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 }
                 [b'\'', ..] => {
                     let mut end = token_start.add(1);
-                    if let b'a'..=b'z' | b'A'..=b'Z' | b'_' = end.read() {
-                        while is_ident(end.read()) {
+                    if is_ident_start(end.read()) {
+                        while is_ident_cont(end.read()) {
                             end = end.add(1);
                         }
                         match end.read() {
@@ -198,7 +204,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 }
                 [b'r', b'#', ..] => {
                     let mut token_end = token_start.add(2);
-                    while is_ident(token_end.read()) {
+                    while is_ident_cont(token_end.read()) {
                         token_end = token_end.add(1);
                     }
                     on_token(TokenKind::RawIdent, token_start, token_end);
@@ -207,7 +213,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
 
                 [b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
                     let mut token_end = token_start.add(1);
-                    while is_ident(token_end.read()) {
+                    while is_ident_cont(token_end.read()) {
                         token_end = token_end.add(1);
                     }
                     on_token(TokenKind::Ident, token_start, token_end);
@@ -219,7 +225,12 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                         token_end = token_end.add(1);
                     }
                     let mut kind = match token_end.cast::<[u8; 2]>().read() {
-                        [b'.', b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
+                        [b'.', b'.', ..] => {
+                            on_token(TokenKind::Int, token_start, token_end);
+                            token_start = token_end;
+                            continue;
+                        }
+                        [b'.', b, ..] if is_ident_start(b) => {
                             on_token(TokenKind::Int, token_start, token_end);
                             token_start = token_end;
                             continue;
@@ -243,7 +254,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                         }
                     }
 
-                    while is_ident(token_end.read()) {
+                    while is_ident_cont(token_end.read()) {
                         token_end = token_end.add(1);
                     }
                     on_token(kind, token_start, token_end);
