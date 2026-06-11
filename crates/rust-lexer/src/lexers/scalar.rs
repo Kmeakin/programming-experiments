@@ -2,6 +2,7 @@
 //! * Iterates over bytes instead of Unicode chars
 //! * Eliminate bounds checks by padding the input with `EOF_BYTE` (0xFF, cannot
 //!   occur in valid UTF8).
+//! * Use `memchr` for finding the end of line comments and raw strings.
 //! * FIXME: handle Unicode whitespace and identifiers
 
 #![allow(unsafe_op_in_unsafe_fn)]
@@ -9,6 +10,19 @@
 use std::time::Duration;
 
 use crate::common::{EOF_BYTE, Lexer, TokenKind};
+use crate::utils::memchr_raw;
+
+/// Only exported for `cargo asm`. Don't actually call!
+pub fn lex_soa(padded_src: &[u8], kinds: &mut Vec<TokenKind>, ends: &mut Vec<u32>) {
+    let mut kinds_ptr = kinds.as_mut_ptr();
+    let mut ends_ptr = ends.as_mut_ptr();
+    lex(padded_src, |kind, _start, end| unsafe {
+        kinds_ptr.write(kind);
+        kinds_ptr = kinds_ptr.add(1);
+        ends_ptr.write(end as u32);
+        ends_ptr = ends_ptr.add(1);
+    });
+}
 
 pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
     let src = padded_src
@@ -16,6 +30,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
         .expect("Input should be padded with EOF_BYTE");
 
     unsafe {
+        let src_end = src.as_ptr_range().end;
         let mut token_start = src.as_ptr();
 
         macro_rules! punct {
@@ -56,10 +71,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 [b'^', ..] => punct!(Caret),
 
                 [b'/', b'/', ..] => {
-                    let mut token_end = token_start.add(2);
-                    while token_end.read() != b'\n' && token_end.read() != EOF_BYTE {
-                        token_end = token_end.add(1);
-                    }
+                    let token_end = memchr_raw(b'\n', token_start, src_end).unwrap_or(src_end);
                     on_token(TokenKind::LineComment, token_start, token_end);
                     token_start = token_end;
                 }
@@ -128,12 +140,12 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                     token_start = end;
                 }
                 [b'b', b'r', b'"', ..] => {
-                    let end = raw_string(token_start.add(1));
+                    let end = raw_string(token_start.add(1), src_end);
                     on_token(TokenKind::RawBStr, token_start, end);
                     token_start = end;
                 }
                 [b'b', b'r', b'#', ..] => {
-                    let end = raw_hash_string(token_start.add(1));
+                    let end = raw_hash_string(token_start.add(1), src_end);
                     on_token(TokenKind::RawBStr, token_start, end);
                     token_start = end;
                 }
@@ -144,23 +156,23 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                     token_start = end;
                 }
                 [b'c', b'r', b'"', ..] => {
-                    let end = raw_string(token_start.add(1));
+                    let end = raw_string(token_start.add(1), src_end);
                     on_token(TokenKind::RawCStr, token_start, end);
                     token_start = end;
                 }
                 [b'c', b'r', b'#', ..] => {
-                    let end = raw_hash_string(token_start.add(1));
+                    let end = raw_hash_string(token_start.add(1), src_end);
                     on_token(TokenKind::RawCStr, token_start, end);
                     token_start = end;
                 }
 
                 [b'r', b'"', ..] => {
-                    let end = raw_string(token_start);
+                    let end = raw_string(token_start, src_end);
                     on_token(TokenKind::RawStr, token_start, end);
                     token_start = end;
                 }
                 [b'r', b'#', b'#' | b'"', ..] => {
-                    let end = raw_hash_string(token_start);
+                    let end = raw_hash_string(token_start, src_end);
                     on_token(TokenKind::RawStr, token_start, end);
                     token_start = end;
                 }
@@ -175,8 +187,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
 
                 [b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
                     let mut token_end = token_start.add(1);
-                    while matches!(token_end.read(), b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'0'..=b'9')
-                    {
+                    while let b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'0'..=b'9' = token_end.read() {
                         token_end = token_end.add(1);
                     }
                     on_token(TokenKind::Ident, token_start, token_end);
@@ -240,6 +251,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
     }
 }
 
+#[inline]
 unsafe fn single_quote_string(start: *const u8) -> *const u8 {
     debug_assert_eq!(start.read(), b'\'');
     let mut end = start.add(1);
@@ -253,6 +265,7 @@ unsafe fn single_quote_string(start: *const u8) -> *const u8 {
     }
 }
 
+#[inline]
 unsafe fn double_quote_string(start: *const u8) -> *const u8 {
     debug_assert_eq!(start.read(), b'\"');
     let mut end = start.add(1);
@@ -266,49 +279,44 @@ unsafe fn double_quote_string(start: *const u8) -> *const u8 {
     }
 }
 
-unsafe fn raw_string(start: *const u8) -> *const u8 {
+#[inline]
+unsafe fn raw_string(start: *const u8, src_end: *const u8) -> *const u8 {
     debug_assert_eq!(start.cast::<[u8; 2]>().read(), *b"r\"");
-    let mut end = start.add(2);
-    loop {
-        match end.read() {
-            b'\"' => return end.add(1),
-            EOF_BYTE => return end,
-            _ => end = end.add(1),
-        }
+    match memchr_raw(b'"', start.add(2), src_end) {
+        Some(end) => end.add(1),
+        None => src_end,
     }
 }
 
-unsafe fn raw_hash_string(start: *const u8) -> *const u8 {
-    debug_assert_eq!(start.cast::<[u8; 2]>().read(), *b"r#");
-    let mut end = start.add(2);
+#[inline]
+unsafe fn raw_hash_string(cursor: *const u8, src_end: *const u8) -> *const u8 {
+    debug_assert_eq!(cursor.cast::<[u8; 2]>().read(), *b"r#");
+    let mut cursor = cursor.add(2);
     let mut num_hashes = 1usize;
-    while end.read() == b'#' {
-        end = end.add(1);
+    while cursor.read() == b'#' {
+        cursor = cursor.add(1);
         num_hashes += 1;
     }
 
-    if end.read() != b'\"' {
-        return end;
+    if cursor.read() != b'\"' {
+        return cursor;
     }
-    end = end.add(1);
+    cursor = cursor.add(1);
 
-    loop {
-        match end.read() {
-            b'\"' => {
-                end = end.add(1);
-                let mut num_hashes = num_hashes;
-                while end.read() == b'#' {
-                    end = end.add(1);
-                    num_hashes -= 1;
-                    if num_hashes == 0 {
-                        return end;
-                    }
-                }
+    let haystack = std::slice::from_ptr_range(cursor..src_end);
+    for pos in memchr::memchr_iter(b'"', haystack) {
+        cursor = haystack.as_ptr().add(pos);
+        cursor = cursor.add(1);
+        let mut num_hashes = num_hashes;
+        while cursor.read() == b'#' {
+            cursor = cursor.add(1);
+            num_hashes -= 1;
+            if num_hashes == 0 {
+                return cursor;
             }
-            EOF_BYTE => return end,
-            _ => end = end.add(1),
         }
     }
+    src_end
 }
 
 pub struct Scalar {}

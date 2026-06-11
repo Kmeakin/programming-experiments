@@ -174,12 +174,32 @@ pub trait Lexer {
         let bytes = self.pad_if_needed(str.as_bytes());
         let mut tokens: Vec<(TokenKind, u32)> = Vec::with_capacity(bytes.len());
         let mut token_ptr = tokens.as_mut_ptr();
-        let duration = self.lex_bytes(&bytes, |kind, _, end_ptr| unsafe {
-            let end_pos = end_ptr.offset_from_unsigned(bytes.as_ptr());
+        let duration = self.lex_bytes(&bytes, |kind, _, end| unsafe {
+            let end_pos = end.offset_from_unsigned(bytes.as_ptr());
             token_ptr.write((kind, end_pos as u32));
             token_ptr = token_ptr.add(1);
         });
         drop(black_box(tokens));
+        duration
+    }
+
+    fn lex_str_to_soa(&self, str: &str) -> Duration {
+        let bytes = self.pad_if_needed(str.as_bytes());
+
+        let mut kinds: Vec<TokenKind> = Vec::with_capacity(bytes.len());
+        let mut kind_ptr = kinds.as_mut_ptr();
+        let mut ends: Vec<u32> = Vec::with_capacity(bytes.len());
+        let mut end_ptr = ends.as_mut_ptr();
+
+        let duration = self.lex_bytes(&bytes, |kind, _, end| unsafe {
+            let end_pos = end.offset_from_unsigned(bytes.as_ptr());
+            kind_ptr.write(kind);
+            kind_ptr = kind_ptr.add(1);
+
+            end_ptr.write(end_pos as u32);
+            end_ptr = end_ptr.add(1);
+        });
+        drop(black_box(ends));
         duration
     }
 }

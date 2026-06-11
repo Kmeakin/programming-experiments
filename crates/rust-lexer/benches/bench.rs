@@ -23,6 +23,15 @@ fn bench(name: &str, c: &mut Criterion, lexer: impl Lexer) {
                 }
                 duration
             });
+        })
+        .bench_function("lex_str_to_soa", |b| {
+            b.iter_custom(|iters| {
+                let mut duration = Duration::ZERO;
+                for _ in 0..iters {
+                    duration += lexer.lex_str_to_soa(src);
+                }
+                duration
+            });
         });
 }
 
