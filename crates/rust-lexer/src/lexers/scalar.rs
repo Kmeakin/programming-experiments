@@ -24,35 +24,26 @@ pub fn lex_soa(padded_src: &[u8], kinds: &mut Vec<TokenKind>, ends: &mut Vec<u32
     });
 }
 
-const IDENT_LUT: [bool; 256] = {
-    let mut lut = [false; 256];
+const LUT: [u8; 256] = {
+    let mut lut = [0; 256];
     let mut i = 0;
     while i < 256 {
-        lut[i] = matches!(i as u8, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_');
+        lut[i] |= (matches!(i as u8, b' ' | 0x09..=0x0C) as u8); // whitespace
+        lut[i] |= (matches!(i as u8, b'_' | b'0'..=b'9') as u8) << 1; // digits
+        lut[i] |= (matches!(i as u8, b'_' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z') as u8) << 2; // idents
         i += 1;
     }
     lut
 };
 
-const DIGIT_LUT: [bool; 256] = {
-    let mut lut = [false; 256];
-    let mut i = 0;
-    while i < 256 {
-        lut[i] = matches!(i as u8, b'0'..=b'9' | b'_');
-        i += 1;
-    }
-    lut
-};
+#[inline]
+const fn is_whitespace(byte: u8) -> bool { LUT[byte as usize] & 0b001 != 0 }
 
-const WHITESPACE_LUT: [bool; 256] = {
-    let mut lut = [false; 256];
-    let mut i = 0;
-    while i < 256 {
-        lut[i] = matches!(i as u8, b' ' | 0x09..=0x0C);
-        i += 1;
-    }
-    lut
-};
+#[inline]
+const fn is_digit(byte: u8) -> bool { LUT[byte as usize] & 0b010 != 0 }
+
+#[inline]
+const fn is_ident(byte: u8) -> bool { LUT[byte as usize] & 0b100 != 0 }
 
 pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
     let src = padded_src
@@ -138,7 +129,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 [b'\'', ..] => {
                     let mut end = token_start.add(1);
                     if let b'a'..=b'z' | b'A'..=b'Z' | b'_' = end.read() {
-                        while IDENT_LUT[end.read() as usize] {
+                        while is_ident(end.read()) {
                             end = end.add(1);
                         }
                         match end.read() {
@@ -208,7 +199,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 }
                 [b'r', b'#', ..] => {
                     let mut token_end = token_start.add(2);
-                    while IDENT_LUT[token_end.read() as usize] {
+                    while is_ident(token_end.read()) {
                         token_end = token_end.add(1);
                     }
                     on_token(TokenKind::RawIdent, token_start, token_end);
@@ -217,7 +208,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
 
                 [b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
                     let mut token_end = token_start.add(1);
-                    while IDENT_LUT[token_end.read() as usize] {
+                    while is_ident(token_end.read()) {
                         token_end = token_end.add(1);
                     }
                     on_token(TokenKind::Ident, token_start, token_end);
@@ -225,7 +216,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 }
                 [b'0'..=b'9', ..] => {
                     let mut token_end = token_start.add(1);
-                    while DIGIT_LUT[token_end.read() as usize] {
+                    while is_digit(token_end.read()) {
                         token_end = token_end.add(1);
                     }
                     let mut kind = match token_end.cast::<[u8; 2]>().read() {
@@ -236,7 +227,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                         }
                         [b'.', ..] => {
                             token_end = token_end.add(1);
-                            while DIGIT_LUT[token_end.read() as usize] {
+                            while is_digit(token_end.read()) {
                                 token_end = token_end.add(1);
                             }
                             TokenKind::Float
@@ -253,7 +244,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                         }
                     }
 
-                    while IDENT_LUT[token_end.read() as usize] {
+                    while is_ident(token_end.read()) {
                         token_end = token_end.add(1);
                     }
                     on_token(kind, token_start, token_end);
@@ -262,7 +253,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
 
                 [b' ' | 0x09..=0x0C, ..] => {
                     let mut token_end = token_start.add(1);
-                    while WHITESPACE_LUT[token_end.read() as usize] {
+                    while is_whitespace(token_end.read()) {
                         token_end = token_end.add(1);
                     }
                     on_token(TokenKind::Whitespace, token_start, token_end);
