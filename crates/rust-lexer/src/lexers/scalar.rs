@@ -163,25 +163,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                     token_start = token_end;
                 }
                 [b'/', b'*', ..] => {
-                    let mut end = token_start.add(2);
-                    let mut depth = 1usize;
-                    end = loop {
-                        match end.cast::<[u8; 2]>().read() {
-                            [b'/', b'*', ..] => {
-                                end = end.add(2);
-                                depth += 1;
-                            }
-                            [b'*', b'/', ..] => {
-                                end = end.add(2);
-                                depth -= 1;
-                                if depth == 0 {
-                                    break end;
-                                }
-                            }
-                            [EOF_BYTE, ..] => break end,
-                            _ => end = end.add(1),
-                        }
-                    };
+                    let end = block_comment(token_start, src_end);
                     on_token(TokenKind::BlockComment, token_start, end);
                     token_start = end;
                 }
@@ -341,6 +323,58 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
             }
         }
     }
+}
+
+#[inline]
+unsafe fn block_comment(start: *const u8, _src_end: *const u8) -> *const u8 {
+    debug_assert_eq!(start.cast::<[u8; 2]>().read(), *b"/*");
+    let mut cursor = start.add(2);
+    let mut depth = 1usize;
+    loop {
+        match cursor.cast::<[u8; 2]>().read() {
+            [b'/', b'*', ..] => {
+                cursor = cursor.add(2);
+                depth += 1;
+            }
+            [b'*', b'/', ..] => {
+                cursor = cursor.add(2);
+                depth -= 1;
+                if depth == 0 {
+                    return cursor;
+                }
+            }
+            [EOF_BYTE, ..] => return cursor,
+            _ => cursor = cursor.add(1),
+        }
+    }
+}
+
+#[inline]
+#[cfg(false)]
+unsafe fn block_comment(start: *const u8, src_end: *const u8) -> *const u8 {
+    debug_assert_eq!(start.cast::<[u8; 2]>().read(), *b"/*");
+
+    let mut depth = 1usize;
+    let haystack = std::slice::from_ptr_range(start.add(2)..src_end);
+    for pos in memchr::memchr2_iter(b'/', b'*', haystack) {
+        let mut cursor = haystack.as_ptr().add(pos);
+        debug_assert_matches!(cursor.read(), b'/' | b'*');
+        match cursor.cast::<[u8; 2]>().read() {
+            [b'/', b'*', ..] => {
+                cursor = cursor.add(2);
+                depth += 1;
+            }
+            [b'*', b'/', ..] => {
+                cursor = cursor.add(2);
+                depth -= 1;
+                if depth == 0 {
+                    return cursor;
+                }
+            }
+            _ => cursor = cursor.add(1),
+        }
+    }
+    src_end
 }
 
 #[inline]
