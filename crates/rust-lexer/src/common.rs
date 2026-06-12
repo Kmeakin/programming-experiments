@@ -1,7 +1,5 @@
 use std::borrow::Cow;
-use std::hint::black_box;
 use std::ops::Range;
-use std::time::Duration;
 
 use crate::lexers;
 
@@ -141,11 +139,7 @@ fn pad(src: &[u8]) -> Vec<u8> {
 pub trait Lexer {
     const NEEDS_PADDING: bool = true;
 
-    fn lex_bytes(
-        &self,
-        bytes: &[u8],
-        on_token: impl FnMut(TokenKind, *const u8, *const u8),
-    ) -> Duration;
+    fn lex_bytes(&self, bytes: &[u8], on_token: impl FnMut(TokenKind, *const u8, *const u8));
 
     fn pad_if_needed<'a>(&self, src: &'a [u8]) -> Cow<'a, [u8]> {
         if Self::NEEDS_PADDING {
@@ -159,9 +153,8 @@ pub trait Lexer {
         &self,
         src: &'src str,
         mut on_token: impl FnMut(TokenKind, Range<usize>, &'src str),
-    ) -> Duration {
+    ) {
         let bytes = self.pad_if_needed(src.as_bytes());
-        let start = std::time::Instant::now();
         self.lex_bytes(&bytes, |kind, start_ptr, end_ptr| unsafe {
             let start_pos = start_ptr.offset_from_unsigned(bytes.as_ptr());
             let end_pos = end_ptr.offset_from_unsigned(bytes.as_ptr());
@@ -169,31 +162,32 @@ pub trait Lexer {
             let range = start_pos..end_pos;
             on_token(kind, range, lexeme);
         });
-        start.elapsed()
     }
 
-    fn lex_str_to_vec(&self, str: &str) -> Duration {
+    fn lex_str_to_vec(&self, str: &str, out: &mut Vec<(TokenKind, u32)>) {
         let bytes = self.pad_if_needed(str.as_bytes());
-        let mut tokens: Vec<(TokenKind, u32)> = Vec::with_capacity(bytes.len());
-        let mut token_ptr = tokens.as_mut_ptr();
-        let duration = self.lex_bytes(&bytes, |kind, _, end| unsafe {
+        debug_assert!(out.capacity() >= bytes.len());
+        out.clear();
+        let mut out_ptr = out.as_mut_ptr();
+        self.lex_bytes(&bytes, |kind, _, end| unsafe {
             let end_pos = end.offset_from_unsigned(bytes.as_ptr());
-            token_ptr.write((kind, end_pos as u32));
-            token_ptr = token_ptr.add(1);
+            out_ptr.write((kind, end_pos as u32));
+            out_ptr = out_ptr.add(1);
         });
-        drop(black_box(tokens));
-        duration
     }
 
-    fn lex_str_to_soa(&self, str: &str) -> Duration {
+    fn lex_str_to_soa(&self, str: &str, kinds_out: &mut Vec<TokenKind>, ends_out: &mut Vec<u32>) {
         let bytes = self.pad_if_needed(str.as_bytes());
+        debug_assert!(kinds_out.capacity() >= bytes.len());
+        debug_assert!(ends_out.capacity() >= bytes.len());
 
-        let mut kinds: Vec<TokenKind> = Vec::with_capacity(bytes.len());
-        let mut kind_ptr = kinds.as_mut_ptr();
-        let mut ends: Vec<u32> = Vec::with_capacity(bytes.len());
-        let mut end_ptr = ends.as_mut_ptr();
+        kinds_out.clear();
+        ends_out.clear();
 
-        let duration = self.lex_bytes(&bytes, |kind, _, end| unsafe {
+        let mut kind_ptr = kinds_out.as_mut_ptr();
+        let mut end_ptr = ends_out.as_mut_ptr();
+
+        self.lex_bytes(&bytes, |kind, _, end| unsafe {
             let end_pos = end.offset_from_unsigned(bytes.as_ptr());
             kind_ptr.write(kind);
             kind_ptr = kind_ptr.add(1);
@@ -201,8 +195,6 @@ pub trait Lexer {
             end_ptr.write(end_pos as u32);
             end_ptr = end_ptr.add(1);
         });
-        drop(black_box(ends));
-        duration
     }
 }
 
@@ -214,8 +206,7 @@ impl Lexer for Rustc {
         &self,
         src: &'src str,
         mut on_token: impl FnMut(TokenKind, Range<usize>, &'src str),
-    ) -> Duration {
-        let start = std::time::Instant::now();
+    ) {
         let mut start_pos = 0usize;
         lexers::rustc::tokenize(src, lexers::rustc::FrontmatterAllowed::No).for_each(|token| {
             let end_pos = start_pos + token.len as usize;
@@ -224,19 +215,14 @@ impl Lexer for Rustc {
             on_token(TokenKind::from(token.kind), range, lexeme);
             start_pos = end_pos;
         });
-        start.elapsed()
     }
 
-    fn lex_bytes(
-        &self,
-        bytes: &[u8],
-        mut on_token: impl FnMut(TokenKind, *const u8, *const u8),
-    ) -> Duration {
+    fn lex_bytes(&self, bytes: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
         let str = unsafe { std::str::from_utf8_unchecked(bytes) };
         self.lex_str(str, |kind, range, _| unsafe {
             let start_ptr = bytes.as_ptr().add(range.start);
             let end_ptr = bytes.as_ptr().add(range.start);
             on_token(kind, start_ptr, end_ptr);
-        })
+        });
     }
 }

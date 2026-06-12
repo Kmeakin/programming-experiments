@@ -8,8 +8,6 @@
 
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use std::time::Duration;
-
 use crate::common::{EOF_BYTE, Lexer, TokenKind};
 use crate::utils::memchr_raw;
 
@@ -71,6 +69,46 @@ const fn is_punct(b: u8) -> Option<TokenKind> {
     } else {
         None
     }
+}
+
+#[inline]
+const unsafe fn eat_whitespace(mut cursor: *const u8) -> *const u8 {
+    loop {
+        let array = cursor.cast::<[u8; 8]>().read();
+        if !is_whitespace(array[0]) {
+            return cursor.add(0);
+        }
+        if !is_whitespace(array[1]) {
+            return cursor.add(1);
+        }
+        if !is_whitespace(array[2]) {
+            return cursor.add(2);
+        }
+        if !is_whitespace(array[3]) {
+            return cursor.add(3);
+        }
+        if !is_whitespace(array[4]) {
+            return cursor.add(4);
+        }
+        if !is_whitespace(array[5]) {
+            return cursor.add(5);
+        }
+        if !is_whitespace(array[6]) {
+            return cursor.add(6);
+        }
+        if !is_whitespace(array[7]) {
+            return cursor.add(7);
+        }
+        cursor = cursor.add(8);
+    }
+}
+
+#[inline]
+const unsafe fn eat_digits(mut cursor: *const u8) -> *const u8 {
+    while is_digit(cursor.read()) {
+        cursor = cursor.add(1);
+    }
+    cursor
 }
 
 #[inline]
@@ -239,8 +277,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                     token_start = end;
                 }
                 [b'r', b'#', ..] => {
-                    let mut token_end = token_start.add(2);
-                    token_end = eat_ident_cont(token_end);
+                    let token_end = eat_ident_cont(token_start.add(2));
                     on_token(TokenKind::RawIdent, token_start, token_end);
                     token_start = token_end;
                 }
@@ -252,9 +289,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 }
                 [b'0'..=b'9', ..] => {
                     let mut token_end = token_start.add(1);
-                    while is_digit(token_end.read()) {
-                        token_end = token_end.add(1);
-                    }
+                    token_end = eat_digits(token_end);
                     let mut kind = match token_end.cast::<[u8; 2]>().read() {
                         [b'.', b'.', ..] => {
                             on_token(TokenKind::Int, token_start, token_end);
@@ -291,10 +326,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 }
 
                 [b' ' | 0x09..=0x0C, ..] => {
-                    let mut token_end = token_start.add(1);
-                    while is_whitespace(token_end.read()) {
-                        token_end = token_end.add(1);
-                    }
+                    let token_end = eat_whitespace(token_start.add(1));
                     on_token(TokenKind::Whitespace, token_start, token_end);
                     token_start = token_end;
                 }
@@ -392,16 +424,8 @@ unsafe fn raw_hash_string(cursor: *const u8, src_end: *const u8) -> *const u8 {
 
 pub struct Scalar {}
 impl Lexer for Scalar {
-    fn lex_bytes(
-        &self,
-        bytes: &[u8],
-        mut on_token: impl FnMut(TokenKind, *const u8, *const u8),
-    ) -> Duration {
-        let start = std::time::Instant::now();
-        lex(bytes, |kind, start, end| {
-            on_token(kind, start, end);
-        });
-        start.elapsed()
+    fn lex_bytes(&self, bytes: &[u8], on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
+        lex(bytes, on_token);
     }
 }
 
