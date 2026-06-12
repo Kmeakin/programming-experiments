@@ -7,6 +7,7 @@ use criterion::measurement::{Measurement, WallTime};
 use rust_lexer::common::{Lexer, Rustc};
 use rust_lexer::lexers::scalar::Scalar;
 use rust_lexer::lexers::scalar_loop_match::ScalarLoopMatch;
+use rust_lexer::lexers::scalar_tail_call::ScalarTailCall;
 
 const RUST_AMALGAMATION: &str = include_str!("../test-data/rust.rs");
 
@@ -52,6 +53,7 @@ fn main() {
             bench("rustc", "cycles", &mut c, Rustc {});
             bench("scalar", "cycles", &mut c, Scalar {});
             bench("scalar_loop_match", "cycles", &mut c, ScalarLoopMatch {});
+            bench("scalar_tail_call", "cycles", &mut c, ScalarTailCall {});
         }
     }
 
@@ -86,5 +88,6 @@ fn main() {
         bench("rustc", "wall_time", &mut c, Rustc {});
         bench("scalar", "wall_time", &mut c, Scalar {});
         bench("scalar_loop_match", "wall_time", &mut c, ScalarLoopMatch {});
+        bench("scalar_tail_call", "wall_time", &mut c, ScalarTailCall {});
     }
 }
