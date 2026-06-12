@@ -73,14 +73,49 @@ const fn is_punct(b: u8) -> Option<TokenKind> {
     }
 }
 
-pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
-    let src = padded_src
-        .strip_suffix(&[EOF_BYTE; 16])
-        .expect("Input should be padded with EOF_BYTE");
+#[inline]
+const unsafe fn eat_ident_cont(mut cursor: *const u8) -> *const u8 {
+    loop {
+        let array = cursor.cast::<[u8; 8]>().read();
+        if !is_ident_cont(array[0]) {
+            return cursor.add(0);
+        }
+        if !is_ident_cont(array[1]) {
+            return cursor.add(1);
+        }
+        if !is_ident_cont(array[2]) {
+            return cursor.add(2);
+        }
+        if !is_ident_cont(array[3]) {
+            return cursor.add(3);
+        }
+        if !is_ident_cont(array[4]) {
+            return cursor.add(4);
+        }
+        if !is_ident_cont(array[5]) {
+            return cursor.add(5);
+        }
+        if !is_ident_cont(array[6]) {
+            return cursor.add(6);
+        }
+        if !is_ident_cont(array[7]) {
+            return cursor.add(7);
+        }
+        cursor = cursor.add(8);
+    }
+}
 
+pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
     unsafe {
-        let src_end = src.as_ptr_range().end;
-        let mut token_start = src.as_ptr();
+        if cfg!(debug_assertions) {
+            padded_src
+                .strip_suffix(&[EOF_BYTE; 16])
+                .expect("Input should be padded with EOF_BYTE");
+        }
+
+        let src_start = padded_src.as_ptr();
+        let src_end = padded_src.as_ptr_range().end.sub(16);
+        let mut token_start = src_start;
 
         loop {
             match token_start.cast::<[u8; 4]>().read() {
@@ -205,18 +240,13 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                 }
                 [b'r', b'#', ..] => {
                     let mut token_end = token_start.add(2);
-                    while is_ident_cont(token_end.read()) {
-                        token_end = token_end.add(1);
-                    }
+                    token_end = eat_ident_cont(token_end);
                     on_token(TokenKind::RawIdent, token_start, token_end);
                     token_start = token_end;
                 }
 
                 [b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
-                    let mut token_end = token_start.add(1);
-                    while is_ident_cont(token_end.read()) {
-                        token_end = token_end.add(1);
-                    }
+                    let token_end = eat_ident_cont(token_start.add(1));
                     on_token(TokenKind::Ident, token_start, token_end);
                     token_start = token_end;
                 }
@@ -255,9 +285,7 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                         }
                     }
 
-                    while is_ident_cont(token_end.read()) {
-                        token_end = token_end.add(1);
-                    }
+                    token_end = eat_ident_cont(token_end);
                     on_token(kind, token_start, token_end);
                     token_start = token_end;
                 }
