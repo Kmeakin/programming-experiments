@@ -6,6 +6,7 @@ use criterion::Criterion;
 use criterion::measurement::{Measurement, WallTime};
 use rust_lexer::common::{Lexer, Rustc};
 use rust_lexer::lexers::scalar::Scalar;
+use rust_lexer::lexers::scalar_loop_match::ScalarLoopMatch;
 
 const RUST_AMALGAMATION: &str = include_str!("../test-data/rust.rs");
 
@@ -50,6 +51,7 @@ fn main() {
                 .with_measurement(HardwareCounter::cycles().unwrap());
             bench("rustc", "cycles", &mut c, Rustc {});
             bench("scalar", "cycles", &mut c, Scalar {});
+            bench("scalar_loop_match", "cycles", &mut c, ScalarLoopMatch {});
         }
     }
 
@@ -83,5 +85,6 @@ fn main() {
             .with_measurement(WallTime);
         bench("rustc", "wall_time", &mut c, Rustc {});
         bench("scalar", "wall_time", &mut c, Scalar {});
+        bench("scalar_loop_match", "wall_time", &mut c, ScalarLoopMatch {});
     }
 }
