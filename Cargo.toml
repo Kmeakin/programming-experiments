@@ -21,13 +21,26 @@ clippy.too_many_lines           = { level = "allow" }
 clippy.type_complexity          = { level = "allow" }
 rust.unsafe_op_in_unsafe_fn     = { level = "allow" }
 
-[profile.test]
-inherits  = "dev"
-opt-level = 1
+[profile.dev]
+opt-level        = 1
+debug            = "full"
+strip            = "none"
+debug-assertions = true
+overflow-checks  = true
+lto              = false
+panic            = "unwind"
+incremental      = true
+codegen-units    = 256
+rpath            = false
 
-[profile.fuzz]
-inherits  = "dev"
-opt-level = 3
-
-[profile.bench]
-inherits = "release"
+[profile.release]
+opt-level        = 3
+debug            = "none"
+strip            = "symbols"
+debug-assertions = false
+overflow-checks  = false
+lto              = "fat"
+panic            = "abort"
+incremental      = false
+codegen-units    = 1
+rpath            = false
