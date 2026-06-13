@@ -153,8 +153,7 @@ pub fn lex<B>(
                     }
                     State::Slash => match token_start.add(1).read() {
                         b'/' => {
-                            let token_end =
-                                memchr_raw(b'\n', token_start, src_end).unwrap_or(src_end);
+                            let token_end = line_comment(token_start, src_end);
                             acc = on_token(acc, TokenKind::LineComment, token_start, token_end);
                             token_start = token_end;
                             next_state!(token_start.read());

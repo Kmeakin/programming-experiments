@@ -128,6 +128,12 @@ pub const unsafe fn eat_ident_cont(mut cursor: *const u8) -> *const u8 {
 }
 
 #[inline]
+pub unsafe fn line_comment(start: *const u8, src_end: *const u8) -> *const u8 {
+    debug_assert_eq!(start.cast::<[u8; 2]>().read(), *b"//");
+    memchr_raw(b'\n', start.add(2), src_end).unwrap_or(src_end)
+}
+
+#[inline]
 pub unsafe fn block_comment(start: *const u8, _src_end: *const u8) -> *const u8 {
     debug_assert_eq!(start.cast::<[u8; 2]>().read(), *b"/*");
     let mut cursor = start.add(2);

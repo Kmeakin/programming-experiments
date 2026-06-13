@@ -43,7 +43,7 @@ pub fn lex<B>(
         loop {
             match token_start.cast::<[u8; 4]>().read() {
                 [b'/', b'/', ..] => {
-                    let token_end = memchr_raw(b'\n', token_start, src_end).unwrap_or(src_end);
+                    let token_end = line_comment(token_start, src_end);
                     acc = on_token(acc, TokenKind::LineComment, token_start, token_end);
                     token_start = token_end;
                 }

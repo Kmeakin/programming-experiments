@@ -136,7 +136,7 @@ impl<B, F: FnMut(B, TokenKind, *const u8, *const u8) -> B> LexState<B, F> {
         debug_assert_eq!(token_start.read(), b'/');
         match token_start.add(1).read() {
             b'/' => {
-                let token_end = memchr_raw(b'\n', token_start, src_end).unwrap_or(src_end);
+                let token_end = line_comment(token_start, src_end);
                 let acc = on_token(acc, TokenKind::LineComment, token_start, token_end);
                 become self.next_state(token_end.read())(self, acc, on_token, token_end, src_end)
             }
