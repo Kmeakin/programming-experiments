@@ -13,14 +13,17 @@ use crate::utils::memchr_raw;
 
 /// Only exported for `cargo asm`. Don't actually call!
 pub fn lex_soa(padded_src: &[u8], kinds: &mut Vec<TokenKind>, ends: &mut Vec<u32>) {
-    let mut kinds_ptr = kinds.as_mut_ptr();
-    let mut ends_ptr = ends.as_mut_ptr();
-    lex(padded_src, |kind, _start, end| unsafe {
-        kinds_ptr.write(kind);
-        kinds_ptr = kinds_ptr.add(1);
-        ends_ptr.write(end as u32);
-        ends_ptr = ends_ptr.add(1);
-    });
+    let kinds_ptr = kinds.as_mut_ptr();
+    let ends_ptr = ends.as_mut_ptr();
+    lex(
+        padded_src,
+        (kinds_ptr, ends_ptr),
+        |(kinds_ptr, ends_ptr), kind, _, end| unsafe {
+            kinds_ptr.write(kind);
+            ends_ptr.write(end as u32);
+            (kinds_ptr.add(1), ends_ptr.add(1))
+        },
+    );
 }
 
 #[rustfmt::skip]
@@ -143,7 +146,11 @@ const unsafe fn eat_ident_cont(mut cursor: *const u8) -> *const u8 {
     }
 }
 
-pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
+pub fn lex<B>(
+    padded_src: &[u8],
+    mut acc: B,
+    mut on_token: impl FnMut(B, TokenKind, *const u8, *const u8) -> B,
+) -> B {
     unsafe {
         if cfg!(debug_assertions) {
             padded_src
@@ -159,12 +166,12 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
             match token_start.cast::<[u8; 4]>().read() {
                 [b'/', b'/', ..] => {
                     let token_end = memchr_raw(b'\n', token_start, src_end).unwrap_or(src_end);
-                    on_token(TokenKind::LineComment, token_start, token_end);
+                    acc = on_token(acc, TokenKind::LineComment, token_start, token_end);
                     token_start = token_end;
                 }
                 [b'/', b'*', ..] => {
                     let end = block_comment(token_start, src_end);
-                    on_token(TokenKind::BlockComment, token_start, end);
+                    acc = on_token(acc, TokenKind::BlockComment, token_start, end);
                     token_start = end;
                 }
                 #[rustfmt::skip]
@@ -172,19 +179,19 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                       | b'*' | b'%' | b'=' | b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@'
                       | b'.' | b'!' | b'>' | b'<' | b'^', ..] => {
                     while let Some(kind) = is_punct(token_start.read()) {
-                        on_token(kind, token_start, token_start.add(1));
+                        acc = on_token(acc, kind, token_start, token_start.add(1));
                         token_start = token_start.add(1);
                     };
                 }
                 [b'/', ..] => {
                     let token_end = token_start.add(1);
-                    on_token(TokenKind::Slash, token_start, token_end);
+                    acc = on_token(acc, TokenKind::Slash, token_start, token_end);
                     token_start = token_end;
                 }
 
                 [b'"', ..] => {
                     let end = double_quote_string(token_start, src_end);
-                    on_token(TokenKind::Str, token_start, end);
+                    acc = on_token(acc, TokenKind::Str, token_start, end);
                     token_start = end;
                 }
                 [b'\'', ..] => {
@@ -196,77 +203,77 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                         match end.read() {
                             b'\'' => {
                                 end = end.add(1);
-                                on_token(TokenKind::Char, token_start, end);
+                                acc = on_token(acc, TokenKind::Char, token_start, end);
                                 token_start = end;
                             }
                             _ => {
-                                on_token(TokenKind::Lifetime, token_start, end);
+                                acc = on_token(acc, TokenKind::Lifetime, token_start, end);
                                 token_start = end;
                             }
                         }
                     } else {
                         end = single_quote_string(token_start);
-                        on_token(TokenKind::Char, token_start, end);
+                        acc = on_token(acc, TokenKind::Char, token_start, end);
                         token_start = end;
                     }
                 }
 
                 [b'b', b'\'', ..] => {
                     let end = single_quote_string(token_start.add(1));
-                    on_token(TokenKind::BChar, token_start, end);
+                    acc = on_token(acc, TokenKind::BChar, token_start, end);
                     token_start = end;
                 }
                 [b'b', b'"', ..] => {
                     let end = double_quote_string(token_start.add(1), src_end);
-                    on_token(TokenKind::BStr, token_start, end);
+                    acc = on_token(acc, TokenKind::BStr, token_start, end);
                     token_start = end;
                 }
                 [b'b', b'r', b'"', ..] => {
                     let end = raw_string(token_start.add(1), src_end);
-                    on_token(TokenKind::RawBStr, token_start, end);
+                    acc = on_token(acc, TokenKind::RawBStr, token_start, end);
                     token_start = end;
                 }
                 [b'b', b'r', b'#', ..] => {
                     let end = raw_hash_string(token_start.add(1), src_end);
-                    on_token(TokenKind::RawBStr, token_start, end);
+                    acc = on_token(acc, TokenKind::RawBStr, token_start, end);
                     token_start = end;
                 }
 
                 [b'c', b'"', ..] => {
                     let end = double_quote_string(token_start.add(1), src_end);
-                    on_token(TokenKind::CStr, token_start, end);
+                    acc = on_token(acc, TokenKind::CStr, token_start, end);
                     token_start = end;
                 }
                 [b'c', b'r', b'"', ..] => {
                     let end = raw_string(token_start.add(1), src_end);
-                    on_token(TokenKind::RawCStr, token_start, end);
+                    acc = on_token(acc, TokenKind::RawCStr, token_start, end);
                     token_start = end;
                 }
                 [b'c', b'r', b'#', ..] => {
                     let end = raw_hash_string(token_start.add(1), src_end);
-                    on_token(TokenKind::RawCStr, token_start, end);
+                    acc = on_token(acc, TokenKind::RawCStr, token_start, end);
                     token_start = end;
                 }
 
                 [b'r', b'"', ..] => {
                     let end = raw_string(token_start, src_end);
-                    on_token(TokenKind::RawStr, token_start, end);
+                    acc = on_token(acc, TokenKind::RawStr, token_start, end);
                     token_start = end;
                 }
                 [b'r', b'#', b'#' | b'"', ..] => {
                     let end = raw_hash_string(token_start, src_end);
-                    on_token(TokenKind::RawStr, token_start, end);
+                    acc = on_token(acc, TokenKind::RawStr, token_start, end);
                     token_start = end;
                 }
                 [b'r', b'#', ..] => {
                     let token_end = eat_ident_cont(token_start.add(2));
-                    on_token(TokenKind::RawIdent, token_start, token_end);
+                    acc = on_token(acc, TokenKind::RawIdent, token_start, token_end);
                     token_start = token_end;
                 }
 
                 [b'a'..=b'z' | b'A'..=b'Z' | b'_', ..] => {
                     let token_end = eat_ident_cont(token_start.add(1));
-                    on_token(TokenKind::Ident, token_start, token_end);
+                    acc = on_token(acc, TokenKind::Ident, token_start, token_end);
                     token_start = token_end;
                 }
                 [b'0'..=b'9', ..] => {
@@ -274,12 +281,12 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                     token_end = eat_digits(token_end);
                     let mut kind = match token_end.cast::<[u8; 2]>().read() {
                         [b'.', b'.', ..] => {
-                            on_token(TokenKind::Int, token_start, token_end);
+                            acc = on_token(acc, TokenKind::Int, token_start, token_end);
                             token_start = token_end;
                             continue;
                         }
                         [b'.', b, ..] if is_ident_start(b) => {
-                            on_token(TokenKind::Int, token_start, token_end);
+                            acc = on_token(acc, TokenKind::Int, token_start, token_end);
                             token_start = token_end;
                             continue;
                         }
@@ -303,21 +310,21 @@ pub fn lex(padded_src: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *co
                     }
 
                     token_end = eat_ident_cont(token_end);
-                    on_token(kind, token_start, token_end);
+                    acc = on_token(acc, kind, token_start, token_end);
                     token_start = token_end;
                 }
 
                 [b' ' | 0x09..=0x0C, ..] => {
                     let token_end = eat_whitespace(token_start.add(1));
-                    on_token(TokenKind::Whitespace, token_start, token_end);
+                    acc = on_token(acc, TokenKind::Whitespace, token_start, token_end);
                     token_start = token_end;
                 }
 
-                [EOF_BYTE, ..] => return,
+                [EOF_BYTE, ..] => return acc,
 
                 _ => {
                     let end = token_start.add(1);
-                    on_token(TokenKind::Unknown, token_start, end);
+                    acc = on_token(acc, TokenKind::Unknown, token_start, end);
                     token_start = end;
                 }
             }
@@ -458,8 +465,13 @@ unsafe fn raw_hash_string(cursor: *const u8, src_end: *const u8) -> *const u8 {
 
 pub struct Scalar {}
 impl Lexer for Scalar {
-    fn lex_bytes(&self, bytes: &[u8], on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
-        lex(bytes, on_token);
+    fn lex_bytes<B>(
+        &self,
+        bytes: &[u8],
+        acc: B,
+        on_token: impl FnMut(B, TokenKind, *const u8, *const u8) -> B,
+    ) -> B {
+        lex(bytes, acc, on_token)
     }
 }
 

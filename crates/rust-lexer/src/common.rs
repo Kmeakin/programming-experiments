@@ -139,7 +139,12 @@ fn pad(src: &[u8]) -> Vec<u8> {
 pub trait Lexer {
     const NEEDS_PADDING: bool = true;
 
-    fn lex_bytes(&self, bytes: &[u8], on_token: impl FnMut(TokenKind, *const u8, *const u8));
+    fn lex_bytes<B>(
+        &self,
+        bytes: &[u8],
+        acc: B,
+        on_token: impl FnMut(B, TokenKind, *const u8, *const u8) -> B,
+    ) -> B;
 
     fn pad_if_needed<'a>(&self, src: &'a [u8]) -> Cow<'a, [u8]> {
         if Self::NEEDS_PADDING {
@@ -149,31 +154,36 @@ pub trait Lexer {
         }
     }
 
-    fn lex_str<'src>(
+    fn lex_str<'src, B>(
         &self,
         src: &'src str,
-        mut on_token: impl FnMut(TokenKind, Range<usize>, &'src str),
-    ) {
+        acc: B,
+        mut on_token: impl FnMut(B, TokenKind, Range<usize>, &'src str) -> B,
+    ) -> B {
         let bytes = self.pad_if_needed(src.as_bytes());
-        self.lex_bytes(&bytes, |kind, start_ptr, end_ptr| unsafe {
+        self.lex_bytes(&bytes, acc, |acc, kind, start_ptr, end_ptr| unsafe {
             let start_pos = start_ptr.offset_from_unsigned(bytes.as_ptr());
             let end_pos = end_ptr.offset_from_unsigned(bytes.as_ptr());
             let lexeme = &src[start_pos..end_pos];
             let range = start_pos..end_pos;
-            on_token(kind, range, lexeme);
-        });
+            on_token(acc, kind, range, lexeme)
+        })
     }
 
     fn lex_str_to_vec(&self, str: &str, out: &mut Vec<(TokenKind, u32)>) {
         let bytes = self.pad_if_needed(str.as_bytes());
         debug_assert!(out.capacity() >= bytes.len());
         out.clear();
-        let mut out_ptr = out.as_mut_ptr();
-        self.lex_bytes(&bytes, |kind, _, end| unsafe {
+        let out_ptr = out.as_mut_ptr();
+        let out_ptr = self.lex_bytes(&bytes, out_ptr, |out_ptr, kind, _, end| unsafe {
             let end_pos = end.offset_from_unsigned(bytes.as_ptr());
             out_ptr.write((kind, end_pos as u32));
-            out_ptr = out_ptr.add(1);
+            out_ptr.add(1)
         });
+        unsafe {
+            let len = out_ptr.offset_from_unsigned(out.as_mut_ptr());
+            out.set_len(len);
+        }
     }
 
     fn lex_str_to_soa(&self, str: &str, kinds_out: &mut Vec<TokenKind>, ends_out: &mut Vec<u32>) {
@@ -184,17 +194,27 @@ pub trait Lexer {
         kinds_out.clear();
         ends_out.clear();
 
-        let mut kind_ptr = kinds_out.as_mut_ptr();
-        let mut end_ptr = ends_out.as_mut_ptr();
+        let kind_ptr = kinds_out.as_mut_ptr();
+        let end_ptr = ends_out.as_mut_ptr();
+        let (kind_ptr, end_ptr) = self.lex_bytes(
+            &bytes,
+            (kind_ptr, end_ptr),
+            |(kind_ptr, end_ptr), kind, _, end| unsafe {
+                let end_pos = end.offset_from_unsigned(bytes.as_ptr());
+                kind_ptr.write(kind);
+                end_ptr.write(end_pos as u32);
+                (kind_ptr.add(1), end_ptr.add(1))
+            },
+        );
 
-        self.lex_bytes(&bytes, |kind, _, end| unsafe {
-            let end_pos = end.offset_from_unsigned(bytes.as_ptr());
-            kind_ptr.write(kind);
-            kind_ptr = kind_ptr.add(1);
+        unsafe {
+            let kind_len = kind_ptr.offset_from_unsigned(kinds_out.as_mut_ptr());
+            let end_len = end_ptr.offset_from_unsigned(ends_out.as_mut_ptr());
+            debug_assert_eq!(kind_len, end_len);
 
-            end_ptr.write(end_pos as u32);
-            end_ptr = end_ptr.add(1);
-        });
+            kinds_out.set_len(kind_len);
+            ends_out.set_len(kind_len);
+        }
     }
 }
 
@@ -202,27 +222,37 @@ pub struct Rustc {}
 impl Lexer for Rustc {
     const NEEDS_PADDING: bool = false;
 
-    fn lex_str<'src>(
+    fn lex_str<'src, B>(
         &self,
         src: &'src str,
-        mut on_token: impl FnMut(TokenKind, Range<usize>, &'src str),
-    ) {
-        let mut start_pos = 0usize;
-        lexers::rustc::tokenize(src, lexers::rustc::FrontmatterAllowed::No).for_each(|token| {
-            let end_pos = start_pos + token.len as usize;
-            let range = start_pos..end_pos;
-            let lexeme = &src[range.clone()];
-            on_token(TokenKind::from(token.kind), range, lexeme);
-            start_pos = end_pos;
-        });
+        acc: B,
+        mut on_token: impl FnMut(B, TokenKind, Range<usize>, &'src str) -> B,
+    ) -> B {
+        let (_, acc) = lexers::rustc::tokenize(src, lexers::rustc::FrontmatterAllowed::No).fold(
+            (0usize, acc),
+            |(start_pos, acc), token| {
+                let end_pos = start_pos + token.len as usize;
+                let range = start_pos..end_pos;
+                let lexeme = &src[range.clone()];
+                let start_pos = end_pos;
+                let acc = on_token(acc, TokenKind::from(token.kind), range, lexeme);
+                (start_pos, acc)
+            },
+        );
+        acc
     }
 
-    fn lex_bytes(&self, bytes: &[u8], mut on_token: impl FnMut(TokenKind, *const u8, *const u8)) {
+    fn lex_bytes<B>(
+        &self,
+        bytes: &[u8],
+        acc: B,
+        mut on_token: impl FnMut(B, TokenKind, *const u8, *const u8) -> B,
+    ) -> B {
         let str = unsafe { std::str::from_utf8_unchecked(bytes) };
-        self.lex_str(str, |kind, range, _| unsafe {
+        self.lex_str(str, acc, |acc, kind, range, _| unsafe {
             let start_ptr = bytes.as_ptr().add(range.start);
             let end_ptr = bytes.as_ptr().add(range.start);
-            on_token(kind, start_ptr, end_ptr);
-        });
+            on_token(acc, kind, start_ptr, end_ptr)
+        })
     }
 }
