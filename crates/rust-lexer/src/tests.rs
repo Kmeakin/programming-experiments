@@ -4,7 +4,7 @@
 
 use crate::common::{Lexer, Rustc};
 
-const RUST_AMALGAMATION: &str = include_str!("../test-data/rust.rs");
+const PACKAGE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 #[track_caller]
 fn check(src: &str, lexer: impl Lexer) {
@@ -23,4 +23,8 @@ fn check(src: &str, lexer: impl Lexer) {
 }
 
 #[track_caller]
-pub fn integration_tests(lexer: impl Lexer) { check(RUST_AMALGAMATION, lexer); }
+pub fn integration_tests(lexer: impl Lexer) {
+    let rust_amalgamation =
+        std::fs::read_to_string(format!("{PACKAGE_ROOT}/test-data/rust.rs")).unwrap();
+    check(rust_amalgamation.as_str(), lexer);
+}

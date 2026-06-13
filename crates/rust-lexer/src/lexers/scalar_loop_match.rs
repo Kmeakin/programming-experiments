@@ -597,6 +597,7 @@ unsafe fn raw_hash_string(cursor: *const u8, src_end: *const u8) -> *const u8 {
     src_end
 }
 
+#[derive(Copy, Clone)]
 pub struct ScalarLoopMatch {}
 impl Lexer for ScalarLoopMatch {
     fn lex_bytes<B>(

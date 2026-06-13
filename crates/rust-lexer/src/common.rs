@@ -218,6 +218,7 @@ pub trait Lexer {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct Rustc {}
 impl Lexer for Rustc {
     const NEEDS_PADDING: bool = false;

@@ -584,6 +584,7 @@ unsafe fn raw_hash_string(cursor: *const u8, src_end: *const u8) -> *const u8 {
     src_end
 }
 
+#[derive(Copy, Clone)]
 pub struct ScalarTailCall {}
 impl Lexer for ScalarTailCall {
     fn lex_bytes<B>(
