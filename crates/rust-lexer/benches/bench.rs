@@ -20,21 +20,25 @@ fn bench_soa<M: Measurement>(b: &mut Bencher<M>, lexer: impl Lexer, src: &str) {
 fn main() {
     let mut c = Criterion::default().configure_from_args();
     let mut group = c.benchmark_group("lexer");
-    for entry in std::fs::read_dir(format!("{PACKAGE_ROOT}/test-data")).unwrap() {
-        let file = entry.unwrap();
-        if file.file_type().unwrap().is_dir() {
-            continue;
-        }
-        if file.path().extension().is_none_or(|ext| ext != "rs") {
-            continue;
-        }
-        let file_name = file.file_name();
-        let name = file_name.to_string_lossy();
-        if name == "rust.rs" {
-            continue;
-        }
-        let src = std::fs::read_to_string(file.path()).unwrap();
+
+    // Sort files by size to get deterministic order.
+    let mut files = std::fs::read_dir(format!("{PACKAGE_ROOT}/test-data"))
+        .unwrap()
+        .map(|entry| entry.unwrap())
+        .filter(|file| file.file_type().unwrap().is_file())
+        .filter(|file| file.path().extension().is_some_and(|ext| ext == "rs"))
+        .map(|file| {
+            (
+                file.file_name(),
+                std::fs::read_to_string(file.path()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    files.sort_by_key(|(_, contents)| contents.len());
+
+    for (name, src) in files {
         group.throughput(Throughput::Bytes(src.len() as u64));
+        let name = name.to_string_lossy();
 
         group.bench_function(BenchmarkId::new("rustc", &name), |b| {
             bench_soa(b, Rustc {}, &src);
