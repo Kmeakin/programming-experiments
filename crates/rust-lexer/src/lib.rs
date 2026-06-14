@@ -1,8 +1,8 @@
 #![feature(
     custom_inner_attributes,
-    slice_from_ptr_range,
+    explicit_tail_calls,
     loop_match,
-    explicit_tail_calls
+    slice_from_ptr_range
 )]
 #![allow(
     clippy::missing_safety_doc,

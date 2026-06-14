@@ -1,6 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
-use crate::common::{EOF_BYTE, Lexer, TokenKind};
+use crate::common::{EOF_BYTE, Lexer, SIMD_PADDING, TokenKind};
 use crate::utils::*;
 
 /// Only exported for `cargo asm`. Don't actually call!
@@ -26,12 +26,12 @@ pub fn lex<B>(
     unsafe {
         if cfg!(debug_assertions) {
             padded_src
-                .strip_suffix(&[EOF_BYTE; 16])
+                .strip_suffix(&[EOF_BYTE; SIMD_PADDING])
                 .expect("Input should be padded with EOF_BYTE");
         }
 
         let src_start = padded_src.as_ptr();
-        let src_end = padded_src.as_ptr_range().end.sub(16);
+        let src_end = padded_src.as_ptr_range().end.sub(SIMD_PADDING);
         let mut token_start = src_start;
         let mut state = lookup_state(token_start.read());
 

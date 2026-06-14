@@ -6,7 +6,7 @@
 //! * Use `memchr` for finding the end of line comments and strings.
 //! * FIXME: handle Unicode whitespace and identifiers
 
-use crate::common::{EOF_BYTE, Lexer, TokenKind};
+use crate::common::{EOF_BYTE, Lexer, SIMD_PADDING, TokenKind};
 use crate::utils::*;
 
 /// Only exported for `cargo asm`. Don't actually call!
@@ -32,7 +32,7 @@ pub fn lex<B>(
     unsafe {
         if cfg!(debug_assertions) {
             padded_src
-                .strip_suffix(&[EOF_BYTE; 16])
+                .strip_suffix(&[EOF_BYTE; SIMD_PADDING])
                 .expect("Input should be padded with EOF_BYTE");
         }
 

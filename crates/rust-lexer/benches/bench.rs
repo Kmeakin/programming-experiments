@@ -4,7 +4,8 @@
 
 use criterion::measurement::Measurement;
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
-use rust_lexer::common::{Lexer, Rustc};
+use rust_lexer::common::{Lexer, Rustc, SIMD_PADDING};
+use rust_lexer::lexers::rustc::FrontmatterAllowed;
 use rust_lexer::lexers::scalar::Scalar;
 use rust_lexer::lexers::scalar_loop_match::ScalarLoopMatch;
 use rust_lexer::lexers::scalar_tail_call::ScalarTailCall;
@@ -12,8 +13,8 @@ use rust_lexer::lexers::scalar_tail_call::ScalarTailCall;
 const PACKAGE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 fn bench_soa<M: Measurement>(b: &mut Bencher<M>, lexer: impl Lexer, src: &str) {
-    let mut out_kinds = Vec::with_capacity(src.len() + 16);
-    let mut out_ends = Vec::with_capacity(src.len() + 16);
+    let mut out_kinds = Vec::with_capacity(src.len() + SIMD_PADDING);
+    let mut out_ends = Vec::with_capacity(src.len() + SIMD_PADDING);
     b.iter(|| lexer.lex_str_to_soa(src, &mut out_kinds, &mut out_ends));
 }
 

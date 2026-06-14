@@ -4,6 +4,7 @@ use std::ops::Range;
 use crate::lexers;
 
 pub const EOF_BYTE: u8 = 0xff;
+pub const SIMD_PADDING: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -132,7 +133,7 @@ impl From<lexers::rustc::TokenKind> for TokenKind {
 fn pad(src: &[u8]) -> Vec<u8> {
     src.iter()
         .copied()
-        .chain([EOF_BYTE; 64])
+        .chain([EOF_BYTE; SIMD_PADDING].iter().copied())
         .collect::<Vec<_>>()
 }
 
