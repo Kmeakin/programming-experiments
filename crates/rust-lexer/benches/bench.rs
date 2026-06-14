@@ -2,6 +2,8 @@
 
 #![allow(clippy::needless_pass_by_value)]
 
+use std::ffi::OsString;
+
 use criterion::measurement::Measurement;
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use rust_lexer::common::{Lexer, Rustc, SIMD_PADDING};
@@ -12,16 +14,7 @@ use rust_lexer::lexers::scalar_tail_call::ScalarTailCall;
 
 const PACKAGE_ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
-fn bench_soa<M: Measurement>(b: &mut Bencher<M>, lexer: impl Lexer, src: &str) {
-    let mut out_kinds = Vec::with_capacity(src.len() + SIMD_PADDING);
-    let mut out_ends = Vec::with_capacity(src.len() + SIMD_PADDING);
-    b.iter(|| lexer.lex_str_to_soa(src, &mut out_kinds, &mut out_ends));
-}
-
-fn main() {
-    let mut c = Criterion::default().configure_from_args();
-    let mut group = c.benchmark_group("lexer");
-
+fn get_files() -> Vec<(OsString, String)> {
     // Sort files by size to get deterministic order.
     let mut files = std::fs::read_dir(format!("{PACKAGE_ROOT}/test-data"))
         .unwrap()
@@ -36,7 +29,18 @@ fn main() {
         })
         .collect::<Vec<_>>();
     files.sort_by_key(|(_, contents)| contents.len());
+    files
+}
 
+fn bench_soa<M: Measurement>(b: &mut Bencher<M>, lexer: impl Lexer, src: &str) {
+    let mut out_kinds = Vec::with_capacity(src.len() + SIMD_PADDING);
+    let mut out_ends = Vec::with_capacity(src.len() + SIMD_PADDING);
+    b.iter(|| lexer.lex_str_to_soa(src, &mut out_kinds, &mut out_ends));
+}
+
+fn lexer(c: &mut Criterion) {
+    let mut group = c.benchmark_group("lexer");
+    let files = get_files();
     for (name, src) in files {
         group.throughput(Throughput::Bytes(src.len() as u64));
         let name = name.to_string_lossy();
@@ -55,5 +59,10 @@ fn main() {
         });
     }
     drop(group);
-    drop(c);
+}
+
+
+fn main() {
+    let mut c = Criterion::default().configure_from_args();
+    lexer(&mut c);
 }
