@@ -7,28 +7,29 @@ pub unsafe fn memchr_raw(needle: u8, start: *const u8, end: *const u8) -> Option
     unsafe { memchr::arch::all::memchr::One::new(needle).find_raw(start, end) }
 }
 
-#[rustfmt::skip]
 const LUT: [u8; 256] = {
     let mut lut = [0; 256];
     let mut i = 0;
     while i < 256 {
+        let b = i as u8;
+
         // whitespace
-        lut[i] |= (matches!(i as u8, | b' ' | 0x09..=0x0C) as u8);
+        lut[i] |= (matches!(b, b' ' | 0x09..=0x0C) as u8);
 
         // digits
-        lut[i] |= (matches!(i as u8, | b'_' | b'0'..=b'9') as u8) << 1;
+        lut[i] |= (matches!(b, b'_' | b'0'..=b'9') as u8) << 1;
 
         // ident starts
-        lut[i] |= (matches!(i as u8, | b'_' | b'a'..=b'z' | b'A'..=b'Z') as u8) << 2;
+        lut[i] |= (matches!(b, b'_'| b'a'..=b'z' | b'A'..=b'Z') as u8) << 2;
 
         // ident conts
-        lut[i] |= (matches!(i as u8, | b'_' | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z') as u8) << 3;
+        lut[i] |= (matches!(b, b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' ) as u8) << 3;
 
         // punctuation
-        lut[i] |= (matches!(i as u8, | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';'
-                                     | b':' | b'+' | b'-' | b'*' | b'%' | b'=' | b'&' | b'|'
-                                     | b'$' | b'?' | b'~' | b'#' | b'@' | b'.' | b'!' | b'>'
-                                     | b'<' | b'^') as u8) << 4;
+        lut[i] |= (matches!(b, b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>') as u8) << 4;
+        lut[i] |= (matches!(b, b',' | b';' | b':' | b'+' | b'-' | b'*' | b'%' | b'=') as u8) << 4;
+        lut[i] |= (matches!(b, b'&' | b'|' | b'$' | b'?' | b'~' | b'#' | b'@' | b'.') as u8) << 4;
+        lut[i] |= (matches!(b, b'!' | b'^') as u8) << 4;
         i += 1;
     }
     lut
