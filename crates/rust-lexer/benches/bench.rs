@@ -7,7 +7,6 @@ use std::ffi::OsString;
 use criterion::measurement::Measurement;
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use rust_lexer::common::{Lexer, Rustc, SIMD_PADDING};
-use rust_lexer::lexers::rustc::FrontmatterAllowed;
 use rust_lexer::lexers::scalar::Scalar;
 use rust_lexer::lexers::scalar_loop_match::ScalarLoopMatch;
 use rust_lexer::lexers::scalar_tail_call::ScalarTailCall;
@@ -60,7 +59,6 @@ fn lexer(c: &mut Criterion) {
     }
     drop(group);
 }
-
 
 fn main() {
     let mut c = Criterion::default().configure_from_args();
