@@ -155,7 +155,7 @@ fn lex_one(text: &str) -> Option<(TokenKind, &str)> {
             loop {
                 match bytes {
                     [] => break (TokenKind::Error(Error::UnterminatedCharacter), bytes),
-                    [b'"', rest @ ..] => break (TokenKind::Character, rest),
+                    [b'\'', rest @ ..] => break (TokenKind::Character, rest),
                     [b'\\', _, rest @ ..] | [_, rest @ ..] => bytes = rest,
                 }
             }
